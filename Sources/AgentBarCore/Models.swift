@@ -466,6 +466,10 @@ public struct DirectorySessionGroup: Identifiable, Hashable, Sendable {
     public var lastActivityAt: Date {
         sessions.map(\.lastActivityAt).max() ?? .distantPast
     }
+
+    public var totalTokens: Int {
+        sessions.reduce(0) { $0 + $1.usage.totalTokens }
+    }
 }
 
 public struct HostSessionGroup: Identifiable, Hashable, Sendable {
@@ -486,6 +490,66 @@ public struct HostSessionGroup: Identifiable, Hashable, Sendable {
 
     public var totalSessionCount: Int {
         directories.reduce(0) { $0 + $1.sessions.count }
+    }
+
+    public var mostUrgentStatus: SessionStatus {
+        directories.map(\.mostUrgentStatus).min() ?? .idle
+    }
+
+    public var lastActivityAt: Date {
+        directories.map(\.lastActivityAt).max() ?? .distantPast
+    }
+
+    public var totalTokens: Int {
+        directories.reduce(0) { $0 + $1.totalTokens }
+    }
+}
+
+public enum ProjectSortOrder: String, Codable, CaseIterable, Identifiable, Sendable {
+    case priorityAndRecent
+    case recentActivity
+    case tokenUsage
+    case sessionCount
+    case alphabetical
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .priorityAndRecent: return "状态优先（待审批/生成中置顶）"
+        case .recentActivity: return "最近活跃时间"
+        case .tokenUsage: return "Token 消耗从高到低"
+        case .sessionCount: return "会话数量从多到少"
+        case .alphabetical: return "项目名称 (A → Z)"
+        }
+    }
+
+    public var shortLabel: String {
+        switch self {
+        case .priorityAndRecent: return "状态优先"
+        case .recentActivity: return "最近活跃"
+        case .tokenUsage: return "按 Token"
+        case .sessionCount: return "按会话数"
+        case .alphabetical: return "按名称"
+        }
+    }
+}
+
+public enum HostSortOrder: String, Codable, CaseIterable, Identifiable, Sendable {
+    case localFirst
+    case urgentFirst
+    case sessionCount
+    case customOrder
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .localFirst: return "本机置顶（默认）"
+        case .urgentFirst: return "待处理 / 活跃服务器优先"
+        case .sessionCount: return "按会话数量排序"
+        case .customOrder: return "自定义服务器顺序"
+        }
     }
 }
 

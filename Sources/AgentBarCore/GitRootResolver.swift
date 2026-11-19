@@ -36,7 +36,11 @@ public enum SessionGroupingBuilder {
     public static func buildHostGroups(
         sessions: [AgentSession],
         hostStates: [HostID: HostConnectionState],
-        homeByHost: [HostID: String] = [:]
+        homeByHost: [HostID: String] = [:],
+        hostSort: HostSortOrder = .localFirst,
+        projectSort: ProjectSortOrder = .priorityAndRecent,
+        pinnedGroupIDs: Set<String> = [],
+        customHostOrder: [String] = []
     ) -> [HostSessionGroup] {
         var byHost: [HostID: [AgentSession]] = [:]
         for session in sessions {
@@ -45,20 +49,8 @@ public enum SessionGroupingBuilder {
         for host in hostStates.keys where byHost[host] == nil {
             byHost[host] = []
         }
-        let sortedHosts = byHost.keys.sorted { lhs, rhs in
-            switch (lhs, rhs) {
-            case (.local, .local): return false
-            case (.local, _): return true
-            case (_, .local): return false
-            case (.ssh(let a), .ssh(let b)):
-                let aOnline = hostStates[lhs]?.isOnline ?? true
-                let bOnline = hostStates[rhs]?.isOnline ?? true
-                if aOnline != bOnline { return aOnline && !bOnline }
-                return a.localizedStandardCompare(b) == .orderedAscending
-            }
-        }
 
-        return sortedHosts.compactMap { host in
+        let unsortedHostGroups: [HostSessionGroup] = byHost.keys.compactMap { host in
             let hostSessions = byHost[host] ?? []
             let conn = hostStates[host] ?? HostConnectionState(host: host, isOnline: true)
             if hostSessions.isEmpty && host == .local {
@@ -105,13 +97,100 @@ public enum SessionGroupingBuilder {
                 if (lhs.directory == nil) != (rhs.directory == nil) {
                     return lhs.directory != nil
                 }
-                if lhs.mostUrgentStatus != rhs.mostUrgentStatus {
-                    return lhs.mostUrgentStatus < rhs.mostUrgentStatus
+                let lPinned = pinnedGroupIDs.contains(lhs.id)
+                let rPinned = pinnedGroupIDs.contains(rhs.id)
+                if lPinned != rPinned {
+                    return lPinned
                 }
-                return lhs.lastActivityAt > rhs.lastActivityAt
+                switch projectSort {
+                case .priorityAndRecent:
+                    if lhs.mostUrgentStatus != rhs.mostUrgentStatus {
+                        return lhs.mostUrgentStatus < rhs.mostUrgentStatus
+                    }
+                    return lhs.lastActivityAt > rhs.lastActivityAt
+                case .recentActivity:
+                    if lhs.lastActivityAt != rhs.lastActivityAt {
+                        return lhs.lastActivityAt > rhs.lastActivityAt
+                    }
+                    return lhs.mostUrgentStatus < rhs.mostUrgentStatus
+                case .tokenUsage:
+                    if lhs.totalTokens != rhs.totalTokens {
+                        return lhs.totalTokens > rhs.totalTokens
+                    }
+                    return lhs.lastActivityAt > rhs.lastActivityAt
+                case .sessionCount:
+                    if lhs.sessions.count != rhs.sessions.count {
+                        return lhs.sessions.count > rhs.sessions.count
+                    }
+                    return lhs.lastActivityAt > rhs.lastActivityAt
+                case .alphabetical:
+                    let cmp = lhs.displayName.localizedStandardCompare(rhs.displayName)
+                    if cmp != .orderedSame {
+                        return cmp == .orderedAscending
+                    }
+                    return lhs.lastActivityAt > rhs.lastActivityAt
+                }
             }
 
             return HostSessionGroup(host: host, connection: conn, directories: dirGroups)
+        }
+
+        let orderIndex = Dictionary(uniqueKeysWithValues: customHostOrder.enumerated().map { ($1, $0) })
+        return unsortedHostGroups.sorted { lhs, rhs in
+            let lPinned = pinnedGroupIDs.contains(lhs.id)
+            let rPinned = pinnedGroupIDs.contains(rhs.id)
+            if lPinned != rPinned {
+                return lPinned
+            }
+
+            switch hostSort {
+            case .localFirst:
+                if lhs.host.isLocal != rhs.host.isLocal {
+                    return lhs.host.isLocal
+                }
+                if lhs.connection.isOnline != rhs.connection.isOnline {
+                    return lhs.connection.isOnline
+                }
+                return lhs.host.displayTitle.localizedStandardCompare(rhs.host.displayTitle) == .orderedAscending
+
+            case .urgentFirst:
+                if lhs.connection.isOnline != rhs.connection.isOnline {
+                    return lhs.connection.isOnline
+                }
+                if lhs.mostUrgentStatus != rhs.mostUrgentStatus {
+                    return lhs.mostUrgentStatus < rhs.mostUrgentStatus
+                }
+                if lhs.lastActivityAt != rhs.lastActivityAt {
+                    return lhs.lastActivityAt > rhs.lastActivityAt
+                }
+                if lhs.host.isLocal != rhs.host.isLocal {
+                    return lhs.host.isLocal
+                }
+                return lhs.host.displayTitle.localizedStandardCompare(rhs.host.displayTitle) == .orderedAscending
+
+            case .sessionCount:
+                if lhs.connection.isOnline != rhs.connection.isOnline {
+                    return lhs.connection.isOnline
+                }
+                if lhs.totalSessionCount != rhs.totalSessionCount {
+                    return lhs.totalSessionCount > rhs.totalSessionCount
+                }
+                if lhs.host.isLocal != rhs.host.isLocal {
+                    return lhs.host.isLocal
+                }
+                return lhs.host.displayTitle.localizedStandardCompare(rhs.host.displayTitle) == .orderedAscending
+
+            case .customOrder:
+                let li = orderIndex[lhs.id] ?? Int.max
+                let ri = orderIndex[rhs.id] ?? Int.max
+                if li != ri {
+                    return li < ri
+                }
+                if lhs.host.isLocal != rhs.host.isLocal {
+                    return lhs.host.isLocal
+                }
+                return lhs.host.displayTitle.localizedStandardCompare(rhs.host.displayTitle) == .orderedAscending
+            }
         }
     }
 

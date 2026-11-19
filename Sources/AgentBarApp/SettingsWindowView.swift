@@ -36,6 +36,18 @@ struct SettingsWindowView: View {
                     }
                 }
 
+                Picker("默认项目排序", selection: $model.projectSortOrder) {
+                    ForEach(ProjectSortOrder.allCases) { order in
+                        Text(order.title).tag(order)
+                    }
+                }
+
+                Picker("默认服务器排序", selection: $model.hostSortOrder) {
+                    ForEach(HostSortOrder.allCases) { order in
+                        Text(order.title).tag(order)
+                    }
+                }
+
                 Toggle("使用演示数据预览完整状态（含待审批/SSH/余额卡片）", isOn: $model.demoModeEnabled)
                 Toggle("显示 Codex 内部子代理（Guardian / Subagent）", isOn: $model.includeSubagents)
                 Toggle("会话待审批 / 完成时发送系统通知", isOn: $model.notificationsEnabled)
@@ -125,7 +137,7 @@ struct SettingsWindowView: View {
             }
 
             List {
-                ForEach($model.sshHosts) { $hostCfg in
+                ForEach(Array($model.sshHosts.enumerated()), id: \.element.id) { idx, $hostCfg in
                     HStack {
                         Toggle(isOn: $hostCfg.isEnabled) {
                             Text(hostCfg.alias)
@@ -135,6 +147,24 @@ struct SettingsWindowView: View {
                         Toggle("允许远程审批", isOn: $hostCfg.approvalEnabled)
                             .controlSize(.small)
                             .disabled(!hostCfg.isEnabled)
+
+                        Button {
+                            model.moveSSHConfig(at: idx, direction: -1)
+                        } label: {
+                            Image(systemName: "arrow.up")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(idx == 0)
+                        .help("上移服务器顺序")
+
+                        Button {
+                            model.moveSSHConfig(at: idx, direction: 1)
+                        } label: {
+                            Image(systemName: "arrow.down")
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(idx == model.sshHosts.count - 1)
+                        .help("下移服务器顺序")
                     }
                 }
             }

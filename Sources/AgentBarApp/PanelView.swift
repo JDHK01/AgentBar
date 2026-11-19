@@ -236,15 +236,88 @@ struct PanelView: View {
     }
 
     private var filterPicker: some View {
-        Picker("", selection: $model.filterMode) {
-            ForEach(SessionFilterMode.allCases) { mode in
-                Text(mode.title).tag(mode)
+        HStack(spacing: 8) {
+            Picker("", selection: $model.filterMode) {
+                ForEach(SessionFilterMode.allCases) { mode in
+                    Text(mode.title).tag(mode)
+                }
             }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+
+            sortMenuButton
         }
-        .pickerStyle(.segmented)
-        .labelsHidden()
         .padding(.horizontal, 13)
         .padding(.bottom, 6)
+    }
+
+    private var sortMenuButton: some View {
+        Menu {
+            Section("项目（工作目录）排序") {
+                ForEach(ProjectSortOrder.allCases) { order in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.projectSortOrder = order
+                        }
+                    } label: {
+                        if model.projectSortOrder == order {
+                            Label(order.title, systemImage: "checkmark")
+                        } else {
+                            Text(order.title)
+                        }
+                    }
+                }
+            }
+
+            Section("服务器（主机）排序") {
+                ForEach(HostSortOrder.allCases) { order in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.hostSortOrder = order
+                        }
+                    } label: {
+                        if model.hostSortOrder == order {
+                            Label(order.title, systemImage: "checkmark")
+                        } else {
+                            Text(order.title)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button("展开全部目录") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    model.expandAllGroups()
+                }
+            }
+            Button("折叠全部工作目录") {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    model.collapseAllDirectories()
+                }
+            }
+            if !model.pinnedGroupIDs.isEmpty {
+                Button("清除全部置顶 (\(model.pinnedGroupIDs.count))") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.clearAllPinnedGroups()
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(model.projectSortOrder.shortLabel)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .lineLimit(1)
+            }
+            .fixedSize()
+        }
+        .menuStyle(.button)
+        .controlSize(.small)
+        .buttonStyle(.glass)
+        .help("排序项目工作目录与服务器（右键任意服务器/目录可置顶或手动调序）")
     }
 
     private var sessionScrollList: some View {
@@ -298,6 +371,7 @@ struct PanelView: View {
     private func hostSection(_ hostGroup: HostSessionGroup) -> some View {
         let isOffline = !hostGroup.connection.isOnline
         let collapsed = model.isGroupCollapsed(hostGroup.id, defaultOffline: isOffline)
+        let isPinned = model.isGroupPinned(hostGroup.id)
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
@@ -312,6 +386,12 @@ struct PanelView: View {
                 Text(hostGroup.host.displayTitle)
                     .font(.system(size: 12, weight: .bold))
 
+                if isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9.5))
+                        .foregroundStyle(Color.accentColor)
+                }
+
                 Spacer()
 
                 hostRightStatus(hostGroup)
@@ -323,6 +403,29 @@ struct PanelView: View {
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.16)) {
                     model.toggleGroupCollapsed(hostGroup.id, isOfflineHost: isOffline)
+                }
+            }
+            .contextMenu {
+                Button(isPinned ? "取消置顶此服务器" : "置顶此服务器") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.toggleGroupPinned(hostGroup.id)
+                    }
+                }
+                Button("服务器位置上移") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.moveHost(hostGroup.id, direction: -1)
+                    }
+                }
+                Button("服务器位置下移") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.moveHost(hostGroup.id, direction: 1)
+                    }
+                }
+                Divider()
+                Button(collapsed ? "展开此服务器" : "折叠此服务器") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.toggleGroupCollapsed(hostGroup.id, isOfflineHost: isOffline)
+                    }
                 }
             }
 
@@ -379,6 +482,7 @@ struct PanelView: View {
 
     private func directorySection(_ dirGroup: DirectorySessionGroup) -> some View {
         let collapsed = model.isGroupCollapsed(dirGroup.id)
+        let isPinned = model.isGroupPinned(dirGroup.id)
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
@@ -400,6 +504,12 @@ struct PanelView: View {
                     .font(.system(size: 12, weight: .semibold))
                     .lineLimit(1)
 
+                if isPinned {
+                    Image(systemName: "pin.fill")
+                        .font(.system(size: 9))
+                        .foregroundStyle(Color.accentColor)
+                }
+
                 Text(dirGroup.abbreviatedPath)
                     .font(.system(size: 10.5))
                     .foregroundStyle(.secondary)
@@ -417,6 +527,26 @@ struct PanelView: View {
             .onTapGesture {
                 withAnimation(.easeInOut(duration: 0.16)) {
                     model.toggleGroupCollapsed(dirGroup.id)
+                }
+            }
+            .contextMenu {
+                if dirGroup.directory != nil {
+                    Button(isPinned ? "取消置顶此项目" : "置顶此项目") {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.toggleGroupPinned(dirGroup.id)
+                        }
+                    }
+                    Button("在 Finder 中打开目录") {
+                        if let path = dirGroup.directory {
+                            NSWorkspace.shared.open(URL(fileURLWithPath: path))
+                        }
+                    }
+                    Divider()
+                }
+                Button(collapsed ? "展开此目录" : "折叠此目录") {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.toggleGroupCollapsed(dirGroup.id)
+                    }
                 }
             }
 

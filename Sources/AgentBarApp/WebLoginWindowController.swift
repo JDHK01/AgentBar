@@ -165,10 +165,9 @@ final class WebBalanceExtractor: NSObject, WKNavigationDelegate {
 
     func webView(
         _ webView: WKWebView,
-        didReceive challenge: URLAuthenticationChallenge,
-        completionHandler: @escaping (URLSession.AuthChallengeDisposition, URLCredential?) -> Void
-    ) {
-        completionHandler(.performDefaultHandling, nil)
+        respondTo challenge: URLAuthenticationChallenge
+    ) async -> (URLSession.AuthChallengeDisposition, URLCredential?) {
+        (.performDefaultHandling, nil)
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {

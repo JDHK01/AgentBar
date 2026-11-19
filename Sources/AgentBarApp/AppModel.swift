@@ -44,6 +44,16 @@ final class AppModel {
     var expandedSessionIDs: Set<String> = []
     var collapsedGroupIDs: Set<String> = []
     var seenSessionIDs: Set<String> = []
+    var pinnedGroupIDs: Set<String> = []
+    var customHostOrder: [String] = []
+
+    var projectSortOrder: ProjectSortOrder = .priorityAndRecent {
+        didSet { UserDefaults.standard.set(projectSortOrder.rawValue, forKey: "projectSortOrder") }
+    }
+
+    var hostSortOrder: HostSortOrder = .localFirst {
+        didSet { UserDefaults.standard.set(hostSortOrder.rawValue, forKey: "hostSortOrder") }
+    }
 
     var menuBarStyle: MenuBarIconStyle = .multiDot {
         didSet {
@@ -158,7 +168,11 @@ final class AppModel {
         return SessionGroupingBuilder.buildHostGroups(
             sessions: filtered,
             hostStates: activeStates,
-            homeByHost: remoteHomes
+            homeByHost: remoteHomes,
+            hostSort: hostSortOrder,
+            projectSort: projectSortOrder,
+            pinnedGroupIDs: pinnedGroupIDs,
+            customHostOrder: customHostOrder
         )
     }
 
@@ -233,6 +247,64 @@ final class AppModel {
                 collapsedGroupIDs.remove(id)
             } else {
                 collapsedGroupIDs.insert(id)
+            }
+        }
+        saveCodable(Array(collapsedGroupIDs), key: "collapsedGroupIDs")
+    }
+
+    func isGroupPinned(_ id: String) -> Bool {
+        pinnedGroupIDs.contains(id)
+    }
+
+    func toggleGroupPinned(_ id: String) {
+        if pinnedGroupIDs.contains(id) {
+            pinnedGroupIDs.remove(id)
+        } else {
+            pinnedGroupIDs.insert(id)
+        }
+        saveCodable(Array(pinnedGroupIDs), key: "pinnedGroupIDs")
+    }
+
+    func clearAllPinnedGroups() {
+        pinnedGroupIDs.removeAll()
+        saveCodable(Array(pinnedGroupIDs), key: "pinnedGroupIDs")
+    }
+
+    func moveHost(_ hostGroupID: String, direction: Int) {
+        var currentIDs = filteredHostGroups.map(\.id)
+        for existing in customHostOrder where !currentIDs.contains(existing) {
+            currentIDs.append(existing)
+        }
+        guard let idx = currentIDs.firstIndex(of: hostGroupID) else { return }
+        let targetIdx = idx + direction
+        guard currentIDs.indices.contains(targetIdx) else { return }
+        currentIDs.swapAt(idx, targetIdx)
+        customHostOrder = currentIDs
+        hostSortOrder = .customOrder
+        saveCodable(customHostOrder, key: "customHostOrder")
+    }
+
+    func moveSSHConfig(at index: Int, direction: Int) {
+        let target = index + direction
+        guard sshHosts.indices.contains(index), sshHosts.indices.contains(target) else { return }
+        sshHosts.swapAt(index, target)
+        var order = [HostID.local.storageKey] + sshHosts.map { HostID.ssh(alias: $0.alias).storageKey }
+        for existing in customHostOrder where !order.contains(existing) {
+            order.append(existing)
+        }
+        customHostOrder = order
+        saveCodable(customHostOrder, key: "customHostOrder")
+    }
+
+    func expandAllGroups() {
+        collapsedGroupIDs.removeAll()
+        saveCodable(Array(collapsedGroupIDs), key: "collapsedGroupIDs")
+    }
+
+    func collapseAllDirectories() {
+        for hg in filteredHostGroups {
+            for dg in hg.directories {
+                collapsedGroupIDs.insert(dg.id)
             }
         }
         saveCodable(Array(collapsedGroupIDs), key: "collapsedGroupIDs")
@@ -562,6 +634,20 @@ final class AppModel {
         }
         if let collapsed: [String] = loadCodable(key: "collapsedGroupIDs") {
             collapsedGroupIDs = Set(collapsed)
+        }
+        if let pinned: [String] = loadCodable(key: "pinnedGroupIDs") {
+            pinnedGroupIDs = Set(pinned)
+        }
+        if let hostOrder: [String] = loadCodable(key: "customHostOrder") {
+            customHostOrder = hostOrder
+        }
+        if let rawProjSort = ud.string(forKey: "projectSortOrder"),
+           let ps = ProjectSortOrder(rawValue: rawProjSort) {
+            projectSortOrder = ps
+        }
+        if let rawHostSort = ud.string(forKey: "hostSortOrder"),
+           let hs = HostSortOrder(rawValue: rawHostSort) {
+            hostSortOrder = hs
         }
         if let hosts: [SSHHostConfig] = loadCodable(key: "sshHosts") {
             sshHosts = hosts
