@@ -97,17 +97,19 @@ enum JumpService {
         }
     }
 
-    private static func openSSHInTerminal(alias: String, cwd: String?, resumeCommand: String?) {
+    static func openSSHInTerminal(alias: String, cwd: String? = nil, resumeCommand: String? = nil) {
         if let resumeCommand {
             copyToPasteboard(resumeCommand)
         }
         let safeAlias = alias.replacingOccurrences(of: "\"", with: "")
+        let controlPath = SSHProbeService.sharedControlPathPattern
+        let muxFlags = "-o ControlMaster=auto -o ControlPath=\(controlPath) -o ControlPersist=30m"
         let remoteCmd: String
         if let cwd, !cwd.isEmpty {
             let escapedDir = cwd.replacingOccurrences(of: "'", with: "'\\''")
-            remoteCmd = "ssh -t \(safeAlias) \"cd '\(escapedDir)' 2>/dev/null; exec \\$SHELL -l\""
+            remoteCmd = "ssh \(muxFlags) -t \(safeAlias) \"cd '\(escapedDir)' 2>/dev/null; exec \\$SHELL -l\""
         } else {
-            remoteCmd = "ssh \(safeAlias)"
+            remoteCmd = "ssh \(muxFlags) \(safeAlias)"
         }
         let escapedForAS = remoteCmd.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         let scriptSource = """

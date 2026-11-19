@@ -140,10 +140,23 @@ struct SettingsWindowView: View {
                 ForEach(Array($model.sshHosts.enumerated()), id: \.element.id) { idx, $hostCfg in
                     HStack {
                         Toggle(isOn: $hostCfg.isEnabled) {
-                            Text(hostCfg.alias)
-                                .font(.system(size: 13, weight: .semibold))
+                            HStack(spacing: 6) {
+                                Text(hostCfg.alias)
+                                    .font(.system(size: 13, weight: .semibold))
+                                if let sub = hostCfg.connectionSubtitle {
+                                    Text(sub)
+                                        .font(.system(size: 11.5))
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
                         }
                         Spacer()
+                        Button("终端登录") {
+                            model.connectAndUnlockSSHHost(hostCfg.alias)
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.glass)
+
                         Toggle("允许远程审批", isOn: $hostCfg.approvalEnabled)
                             .controlSize(.small)
                             .disabled(!hostCfg.isEnabled)

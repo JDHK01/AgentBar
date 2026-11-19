@@ -199,7 +199,7 @@ final class StatusBarController: NSObject {
         scheduleResizeVisiblePanel()
 
         Task {
-            await model.refreshLocalSessions()
+            await model.refreshOnPanelOpen()
         }
     }
 

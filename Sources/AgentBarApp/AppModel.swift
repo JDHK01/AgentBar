@@ -27,6 +27,7 @@ final class AppModel {
     var sessions: [AgentSession] = []
     var hostStates: [HostID: HostConnectionState] = [.local: HostConnectionState(host: .local, isOnline: true)]
     var remoteHomes: [HostID: String] = [:]
+    var probingHostIDs: Set<HostID> = []
     var balanceReadings: [BalanceReading] = []
     var subscriptionCards: [SubscriptionCardItem] = []
 
@@ -114,6 +115,7 @@ final class AppModel {
     private var notifiedApprovalIDs: Set<String> = []
     private var localPollTask: Task<Void, Never>?
     private var sshPollTask: Task<Void, Never>?
+    private var lastSSHProbeAt: Date?
 
     init() {
         loadPersistedPreferences()
@@ -391,6 +393,15 @@ final class AppModel {
         }
     }
 
+    func refreshOnPanelOpen() async {
+        guard !demoModeEnabled else { return }
+        await refreshLocalSessions()
+        let needsSSH = lastSSHProbeAt == nil || Date().timeIntervalSince(lastSSHProbeAt!) > 12
+        if needsSSH {
+            await refreshSSHHosts()
+        }
+    }
+
     func refreshLocalSessions() async {
         guard !demoModeEnabled else { return }
         let lookback = lookbackHours
@@ -436,10 +447,38 @@ final class AppModel {
             return
         }
 
-        let seen = seenSessionIDs
         for cfg in enabledHosts {
-            let res = await SSHProbeService.probeHost(alias: cfg.alias, seenSessionIDs: seen)
+            let hid = HostID.ssh(alias: cfg.alias)
+            probingHostIDs.insert(hid)
+            if hostStates[hid] == nil {
+                hostStates[hid] = HostConnectionState(host: hid, isOnline: true)
+            }
+        }
+
+        let seen = seenSessionIDs
+        let remoteLookback = max(lookbackHours, 168)
+
+        let results = await withTaskGroup(of: (SSHHostConfig, SSHProbeResult).self, returning: [(SSHHostConfig, SSHProbeResult)].self) { group in
+            for cfg in enabledHosts {
+                group.addTask {
+                    let res = await SSHProbeService.probeHost(
+                        alias: cfg.alias,
+                        lookbackHours: remoteLookback,
+                        seenSessionIDs: seen
+                    )
+                    return (cfg, res)
+                }
+            }
+            var collected: [(SSHHostConfig, SSHProbeResult)] = []
+            for await pair in group {
+                collected.append(pair)
+            }
+            return collected
+        }
+
+        for (cfg, res) in results {
             let hostID = HostID.ssh(alias: cfg.alias)
+            probingHostIDs.remove(hostID)
             hostStates[hostID] = res.connection
             if let rHome = res.remoteHome {
                 remoteHomes[hostID] = rHome
@@ -452,6 +491,52 @@ final class AppModel {
                 sessions.removeAll { $0.host == hostID }
                 sessions.append(contentsOf: remoteList)
             }
+        }
+        lastSSHProbeAt = Date()
+        notifyStatusBar()
+    }
+
+    func toggleSSHHostEnabled(_ alias: String) {
+        guard let idx = sshHosts.firstIndex(where: { $0.alias == alias }) else { return }
+        sshHosts[idx].isEnabled.toggle()
+        Task { await refreshSSHHosts() }
+    }
+
+    func connectAndUnlockSSHHost(_ alias: String) {
+        JumpService.openSSHInTerminal(alias: alias)
+        Task { @MainActor [weak self] in
+            for delaySec in [4, 6, 8] {
+                try? await Task.sleep(for: .seconds(delaySec))
+                guard let self, !self.demoModeEnabled else { return }
+                await self.probeSingleSSHHost(alias: alias)
+            }
+        }
+    }
+
+    func probeSingleSSHHost(alias: String) async {
+        guard !demoModeEnabled,
+              let cfg = sshHosts.first(where: { $0.alias == alias && $0.isEnabled }) else {
+            return
+        }
+        let hostID = HostID.ssh(alias: alias)
+        probingHostIDs.insert(hostID)
+        let res = await SSHProbeService.probeHost(
+            alias: alias,
+            lookbackHours: max(lookbackHours, 168),
+            seenSessionIDs: seenSessionIDs
+        )
+        probingHostIDs.remove(hostID)
+        hostStates[hostID] = res.connection
+        if let rHome = res.remoteHome {
+            remoteHomes[hostID] = rHome
+        }
+        if res.connection.isOnline {
+            var remoteList = res.sessions
+            if cfg.approvalEnabled {
+                mergePendingApprovals(res.pendingApprovals, into: &remoteList, host: hostID)
+            }
+            sessions.removeAll { $0.host == hostID }
+            sessions.append(contentsOf: remoteList)
         }
         notifyStatusBar()
     }
@@ -558,12 +643,45 @@ final class AppModel {
     }
 
     func discoverAndMergeSSHHosts() {
-        let discovered = SSHProbeService.discoverSSHConfigHosts()
-        var existingByAlias = Dictionary(uniqueKeysWithValues: sshHosts.map { ($0.alias, $0) })
-        for alias in discovered where existingByAlias[alias] == nil {
-            existingByAlias[alias] = SSHHostConfig(alias: alias, isEnabled: false, approvalEnabled: true)
+        let ud = UserDefaults.standard
+        let needsAutoEnableMigration = !ud.bool(forKey: "sshAutoEnableMigratedV2")
+        let discovered = SSHProbeService.discoverSSHConfigEntries()
+        let cleanedExisting = sshHosts.filter {
+            !SSHProbeService.isIgnoredGitOrWildcardHost(alias: $0.alias, hostname: $0.hostname, user: $0.user)
         }
-        sshHosts = existingByAlias.values.sorted { $0.alias.localizedStandardCompare($1.alias) == .orderedAscending }
+        var existingByAlias = Dictionary(uniqueKeysWithValues: cleanedExisting.map { ($0.alias, $0) })
+
+        for entry in discovered {
+            if var old = existingByAlias[entry.alias] {
+                old.hostname = entry.hostname ?? old.hostname
+                old.user = entry.user ?? old.user
+                old.port = entry.port ?? old.port
+                if needsAutoEnableMigration {
+                    old.isEnabled = true
+                }
+                existingByAlias[entry.alias] = old
+            } else {
+                existingByAlias[entry.alias] = entry
+            }
+        }
+        if needsAutoEnableMigration {
+            ud.set(true, forKey: "sshAutoEnableMigratedV2")
+        }
+
+        let ordered = existingByAlias.values.sorted { $0.alias.localizedStandardCompare($1.alias) == .orderedAscending }
+        sshHosts = ordered
+
+        for cfg in ordered where cfg.isEnabled {
+            let hid = HostID.ssh(alias: cfg.alias)
+            if hostStates[hid] == nil {
+                hostStates[hid] = HostConnectionState(host: hid, isOnline: true)
+            }
+        }
+    }
+
+    func sshHostConfig(for host: HostID) -> SSHHostConfig? {
+        guard case .ssh(let alias) = host else { return nil }
+        return sshHosts.first { $0.alias == alias }
     }
 
     var launchAtLoginEnabled: Bool {

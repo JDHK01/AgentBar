@@ -51,7 +51,8 @@ struct AgentBarHookMain {
         let realCodex = await CodexAdapter.loadLocalSessions(lookbackHours: 168)
         let realDSH = await DeepSeekHarnessAdapter.loadLocalSessions(lookbackHours: 168)
         let realCursor = await CursorTraeAdapter.loadLocalSessions(lookbackHours: 168)
-        print("PASS self-test | local sessions discovered -> claude=\(realClaude.count), codex=\(realCodex.count), dsh=\(realDSH.count), cursor=\(realCursor.count)")
+        let sshEntries = SSHProbeService.discoverSSHConfigEntries()
+        print("PASS self-test | local sessions -> claude=\(realClaude.count), codex=\(realCodex.count), dsh=\(realDSH.count), cursor=\(realCursor.count), ssh_hosts=\(sshEntries.count)")
     }
 
     private static func handleClaudePermission(json: [String: Any]) {

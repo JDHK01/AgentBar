@@ -236,7 +236,7 @@ struct PanelView: View {
     }
 
     private var filterPicker: some View {
-        HStack(spacing: 8) {
+        HStack(spacing: 6) {
             Picker("", selection: $model.filterMode) {
                 ForEach(SessionFilterMode.allCases) { mode in
                     Text(mode.title).tag(mode)
@@ -245,10 +245,71 @@ struct PanelView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
 
+            sshServersMenuButton
             sortMenuButton
         }
         .padding(.horizontal, 13)
         .padding(.bottom, 6)
+    }
+
+    private var sshServersMenuButton: some View {
+        let enabledCount = model.sshHosts.filter(\.isEnabled).count
+        return Menu {
+            Section("~/.ssh/config 远程服务器") {
+                if model.sshHosts.isEmpty {
+                    Text("未在 ~/.ssh/config 发现远程服务器")
+                } else {
+                    ForEach(model.sshHosts) { cfg in
+                        Button {
+                            model.toggleSSHHostEnabled(cfg.alias)
+                        } label: {
+                            let labelText = cfg.connectionSubtitle.map { "\(cfg.alias) (\($0))" } ?? cfg.alias
+                            if cfg.isEnabled {
+                                Label(labelText, systemImage: "checkmark")
+                            } else {
+                                Text(labelText)
+                            }
+                        }
+                    }
+                }
+            }
+
+            if !model.sshHosts.isEmpty {
+                Section("在终端打开 SSH（自动共享连接）") {
+                    ForEach(model.sshHosts) { cfg in
+                        Button("SSH 连接 \(cfg.alias)…") {
+                            model.connectAndUnlockSSHHost(cfg.alias)
+                        }
+                    }
+                }
+            }
+
+            Divider()
+
+            Button("重新扫描 ~/.ssh/config 并探测") {
+                model.discoverAndMergeSSHHosts()
+                Task { await model.refreshSSHHosts() }
+            }
+
+            Button("管理 SSH 服务器…") {
+                model.selectedSettingsTab = 2
+                onOpenSettings()
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Image(systemName: "server.rack")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(enabledCount > 0 ? "SSH \(enabledCount)" : "SSH")
+                    .font(.system(size: 10.5, weight: .medium))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .fixedSize()
+        }
+        .menuStyle(.button)
+        .controlSize(.small)
+        .buttonStyle(.glass)
+        .help("查看与切换 ~/.ssh/config 中的远程服务器")
     }
 
     private var sortMenuButton: some View {
@@ -329,7 +390,7 @@ struct PanelView: View {
                         model.selectedSettingsTab = 3
                         onOpenSettings()
                     }
-                } else if hostGroups.isEmpty || hostGroups.allSatisfy({ $0.directories.isEmpty }) {
+                } else if hostGroups.isEmpty || (hostGroups.count == 1 && hostGroups[0].host.isLocal && hostGroups[0].directories.isEmpty) {
                     emptyPlaceholder
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
@@ -370,8 +431,9 @@ struct PanelView: View {
 
     private func hostSection(_ hostGroup: HostSessionGroup) -> some View {
         let isOffline = !hostGroup.connection.isOnline
-        let collapsed = model.isGroupCollapsed(hostGroup.id, defaultOffline: isOffline)
+        let collapsed = model.isGroupCollapsed(hostGroup.id, defaultOffline: false)
         let isPinned = model.isGroupPinned(hostGroup.id)
+        let sshSubtitle = model.sshHostConfig(for: hostGroup.host)?.connectionSubtitle
         return VStack(alignment: .leading, spacing: 1) {
             HStack(spacing: 6) {
                 Image(systemName: collapsed ? "chevron.right" : "chevron.down")
@@ -385,6 +447,15 @@ struct PanelView: View {
 
                 Text(hostGroup.host.displayTitle)
                     .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1)
+
+                if let sshSubtitle, !hostGroup.host.isLocal {
+                    Text(sshSubtitle)
+                        .font(.system(size: 10))
+                        .foregroundStyle(.secondary.opacity(0.8))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
 
                 if isPinned {
                     Image(systemName: "pin.fill")
@@ -406,6 +477,15 @@ struct PanelView: View {
                 }
             }
             .contextMenu {
+                if case .ssh(let alias) = hostGroup.host {
+                    Button("在终端打开 SSH 连接（\(alias)）") {
+                        model.connectAndUnlockSSHHost(alias)
+                    }
+                    Button("立即重新探测此服务器") {
+                        Task { await model.probeSingleSSHHost(alias: alias) }
+                    }
+                    Divider()
+                }
                 Button(isPinned ? "取消置顶此服务器" : "置顶此服务器") {
                     withAnimation(.easeInOut(duration: 0.16)) {
                         model.toggleGroupPinned(hostGroup.id)
@@ -430,14 +510,38 @@ struct PanelView: View {
             }
 
             if !collapsed {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(hostGroup.directories) { dirGroup in
-                        directorySection(dirGroup)
+                if hostGroup.directories.isEmpty, case .ssh(let alias) = hostGroup.host {
+                    remoteEmptyServerRow(alias: alias, isOnline: hostGroup.connection.isOnline)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(hostGroup.directories) { dirGroup in
+                            directorySection(dirGroup)
+                        }
                     }
+                    .opacity(isOffline ? 0.58 : 1.0)
                 }
-                .opacity(isOffline ? 0.58 : 1.0)
             }
         }
+    }
+
+    private func remoteEmptyServerRow(alias: String, isOnline: Bool) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: isOnline ? "terminal" : "key.horizontal")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Text(isOnline ? "远端暂无最近活跃的 Agent 会话" : "需在终端完成一次 SSH 登录以共享连接")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button(isOnline ? "打开 SSH 终端" : "终端登录解锁") {
+                model.connectAndUnlockSSHHost(alias)
+            }
+            .controlSize(.mini)
+            .buttonStyle(.glass)
+        }
+        .padding(.leading, 30)
+        .padding(.trailing, 14)
+        .padding(.vertical, 5)
     }
 
     @ViewBuilder
@@ -446,18 +550,27 @@ struct PanelView: View {
             Text("\(hostGroup.totalSessionCount) 个会话")
                 .font(.system(size: 11))
                 .foregroundStyle(.secondary)
+        } else if model.probingHostIDs.contains(hostGroup.host) {
+            HStack(spacing: 4) {
+                Circle()
+                    .fill(Color.accentColor)
+                    .frame(width: 6, height: 6)
+                Text("SSH · 探测中…")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+            }
         } else if hostGroup.connection.isOnline {
             HStack(spacing: 4) {
                 Circle()
                     .fill(Color.green)
                     .frame(width: 6, height: 6)
                 if let ms = hostGroup.connection.latencyMs {
-                    Text("SSH · \(ms) ms")
+                    Text("SSH · \(ms) ms · \(hostGroup.totalSessionCount) 会话")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 } else {
-                    Text("SSH · 在线")
+                    Text("SSH · 在线 · \(hostGroup.totalSessionCount) 会话")
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                 }
@@ -470,8 +583,21 @@ struct PanelView: View {
                 Text("离线 · \(hostGroup.connection.errorMessage ?? "不可达")")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                if case .ssh(let alias) = hostGroup.host {
+                    Button("终端登录") {
+                        model.connectAndUnlockSSHHost(alias)
+                    }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Color.accentColor)
+                }
                 Button("重连") {
-                    Task { await model.refreshSSHHosts() }
+                    if case .ssh(let alias) = hostGroup.host {
+                        Task { await model.probeSingleSSHHost(alias: alias) }
+                    } else {
+                        Task { await model.refreshSSHHosts() }
+                    }
                 }
                 .buttonStyle(.plain)
                 .font(.system(size: 11, weight: .medium))
