@@ -5,22 +5,6 @@ import Observation
 import ServiceManagement
 import UserNotifications
 
-enum SessionFilterMode: String, CaseIterable, Identifiable {
-    case all
-    case active
-    case attention
-
-    var id: String { rawValue }
-
-    var title: String {
-        switch self {
-        case .all: return "全部"
-        case .active: return "进行中"
-        case .attention: return "需关注"
-        }
-    }
-}
-
 @MainActor
 @Observable
 final class AppModel {
@@ -33,13 +17,14 @@ final class AppModel {
 
     var isShowingOverview: Bool = false
     var selectedSettingsTab: Int = 0
-    var filterMode: SessionFilterMode = .all {
+    var selectedCategory: StatusCategoryFilter? = nil {
         didSet {
             if isShowingOverview {
                 isShowingOverview = false
             }
         }
     }
+    var selectedHostFilter: HostID? = nil
     var searchQuery: String = ""
     var isSearchVisible: Bool = false
     var expandedSessionIDs: Set<String> = []
@@ -97,6 +82,7 @@ final class AppModel {
     var standaloneMarkdownSession: AgentSession?
     var newSSHAliasDraft: String = ""
     var hookInstallMessage: String?
+    var quickBannerToast: String?
     var balanceTestMessage: [UUID: String] = [:]
     var tokenInputs: [UUID: String] = [:]
 
@@ -139,16 +125,15 @@ final class AppModel {
     var filteredHostGroups: [HostSessionGroup] {
         let query = searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let filtered = sessions.filter { session in
-            let matchesFilter: Bool
-            switch filterMode {
-            case .all:
-                matchesFilter = true
-            case .active:
-                matchesFilter = session.status.isActiveWork
-            case .attention:
-                matchesFilter = session.status.needsAttention || (session.status == .completed && !session.isSeen)
+            if session.kind.isChatOnly {
+                return false
             }
-            guard matchesFilter else { return false }
+            if let hostFilter = selectedHostFilter, session.host != hostFilter {
+                return false
+            }
+            if let category = selectedCategory, !category.matches(session) {
+                return false
+            }
             guard !query.isEmpty else { return true }
             return session.title.lowercased().contains(query)
                 || session.overview.lowercased().contains(query)
@@ -158,7 +143,9 @@ final class AppModel {
         }
 
         let activeStates: [HostID: HostConnectionState]
-        if filterMode == .all && query.isEmpty {
+        if let hostFilter = selectedHostFilter {
+            activeStates = [hostFilter: hostStates[hostFilter] ?? HostConnectionState(host: hostFilter, isOnline: true)]
+        } else if selectedCategory == nil && query.isEmpty {
             activeStates = hostStates
         } else {
             var subset: [HostID: HostConnectionState] = [:]
@@ -176,6 +163,20 @@ final class AppModel {
             pinnedGroupIDs: pinnedGroupIDs,
             customHostOrder: customHostOrder
         )
+    }
+
+    var allHostSummaries: [(host: HostID, connection: HostConnectionState, sessionCount: Int)] {
+        let realSessions = sessions.filter { !$0.kind.isChatOnly }
+        let groups = SessionGroupingBuilder.buildHostGroups(
+            sessions: realSessions,
+            hostStates: hostStates,
+            homeByHost: remoteHomes,
+            hostSort: hostSortOrder,
+            projectSort: projectSortOrder,
+            pinnedGroupIDs: pinnedGroupIDs,
+            customHostOrder: customHostOrder
+        )
+        return groups.map { ($0.host, $0.connection, $0.totalSessionCount) }
     }
 
     var todaySummaryText: String {
@@ -265,6 +266,80 @@ final class AppModel {
             pinnedGroupIDs.insert(id)
         }
         saveCodable(Array(pinnedGroupIDs), key: "pinnedGroupIDs")
+    }
+
+    func toggleStatusCategory(_ category: StatusCategoryFilter) {
+        if selectedCategory == category {
+            selectedCategory = nil
+        } else {
+            selectedCategory = category
+        }
+    }
+
+    func toggleHostFilter(_ host: HostID) {
+        if selectedHostFilter == host {
+            selectedHostFilter = nil
+        } else {
+            selectedHostFilter = host
+        }
+    }
+
+    var isHookInstalled: Bool {
+        HookApprovalManager.isClaudeHooksInstalled()
+    }
+
+    func enableOneClickApprovalHooks() {
+        let hookPath = HookApprovalManager.hookBinaryPath()
+        do {
+            let saved = try HookApprovalManager.installClaudeHooks(hookExecutablePath: hookPath)
+            hookInstallMessage = "✓ 已安装至 \(saved)"
+            showQuickToast("✓ 已开启 Claude 一键审批 Hook")
+        } catch {
+            showQuickToast("Hook 安装失败：\(error.localizedDescription)")
+        }
+    }
+
+    func approveAllPending() {
+        let pendingSessions = sessions.filter { $0.status == .awaitingApproval }
+        guard !pendingSessions.isEmpty else {
+            if !isHookInstalled {
+                enableOneClickApprovalHooks()
+            }
+            return
+        }
+
+        if let risky = pendingSessions.first(where: { $0.pendingApproval?.highRiskMatchedRule != nil }) {
+            confirmingHighRiskSession = risky
+            return
+        }
+
+        var approvedHookCount = 0
+        var firstTerminalOnly: AgentSession?
+        for session in pendingSessions {
+            if let approval = session.pendingApproval, approval.canRespondViaHook {
+                performApprovalDecision(session: session, approval: approval, action: .allow, reason: nil)
+                approvedHookCount += 1
+            } else if firstTerminalOnly == nil {
+                firstTerminalOnly = session
+            }
+        }
+
+        if approvedHookCount > 0 {
+            showQuickToast("✓ 已一键批准 \(approvedHookCount) 个请求")
+        }
+        if let termSession = firstTerminalOnly {
+            JumpService.jump(to: termSession)
+        }
+    }
+
+    private func showQuickToast(_ text: String) {
+        quickBannerToast = text
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2.8))
+            if self?.quickBannerToast == text {
+                self?.quickBannerToast = nil
+            }
+        }
     }
 
     func clearAllPinnedGroups() {
@@ -418,8 +493,6 @@ final class AppModel {
             ProcessAndChatScanner.scanLocalAgentProcesses()
         }.value
         ProcessAndChatScanner.attachProcesses(to: &local, processes: procs)
-        let chatApps = ProcessAndChatScanner.scanRunningChatApps(processes: procs)
-        local.append(contentsOf: chatApps)
 
         let pendingApprovals = HookApprovalManager.loadLocalPendingApprovals()
         mergePendingApprovals(pendingApprovals, into: &local, host: .local)
@@ -458,7 +531,7 @@ final class AppModel {
         let seen = seenSessionIDs
         let remoteLookback = max(lookbackHours, 168)
 
-        let results = await withTaskGroup(of: (SSHHostConfig, SSHProbeResult).self, returning: [(SSHHostConfig, SSHProbeResult)].self) { group in
+        await withTaskGroup(of: (SSHHostConfig, SSHProbeResult).self) { group in
             for cfg in enabledHosts {
                 group.addTask {
                     let res = await SSHProbeService.probeHost(
@@ -469,27 +542,22 @@ final class AppModel {
                     return (cfg, res)
                 }
             }
-            var collected: [(SSHHostConfig, SSHProbeResult)] = []
-            for await pair in group {
-                collected.append(pair)
-            }
-            return collected
-        }
-
-        for (cfg, res) in results {
-            let hostID = HostID.ssh(alias: cfg.alias)
-            probingHostIDs.remove(hostID)
-            hostStates[hostID] = res.connection
-            if let rHome = res.remoteHome {
-                remoteHomes[hostID] = rHome
-            }
-            if res.connection.isOnline {
-                var remoteList = res.sessions
-                if cfg.approvalEnabled {
-                    mergePendingApprovals(res.pendingApprovals, into: &remoteList, host: hostID)
+            for await (cfg, res) in group {
+                let hostID = HostID.ssh(alias: cfg.alias)
+                probingHostIDs.remove(hostID)
+                hostStates[hostID] = res.connection
+                if let rHome = res.remoteHome {
+                    remoteHomes[hostID] = rHome
                 }
-                sessions.removeAll { $0.host == hostID }
-                sessions.append(contentsOf: remoteList)
+                if res.connection.isOnline {
+                    var remoteList = res.sessions
+                    if cfg.approvalEnabled {
+                        mergePendingApprovals(res.pendingApprovals, into: &remoteList, host: hostID)
+                    }
+                    sessions.removeAll { $0.host == hostID }
+                    sessions.append(contentsOf: remoteList)
+                }
+                notifyStatusBar()
             }
         }
         lastSSHProbeAt = Date()
@@ -752,6 +820,11 @@ final class AppModel {
         }
         if let collapsed: [String] = loadCodable(key: "collapsedGroupIDs") {
             collapsedGroupIDs = Set(collapsed)
+        }
+        if !ud.bool(forKey: "v3GroupingMigrated") {
+            collapsedGroupIDs = collapsedGroupIDs.filter { $0.contains("::") }
+            saveCodable(Array(collapsedGroupIDs), key: "collapsedGroupIDs")
+            ud.set(true, forKey: "v3GroupingMigrated")
         }
         if let pinned: [String] = loadCodable(key: "pinnedGroupIDs") {
             pinnedGroupIDs = Set(pinned)

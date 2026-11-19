@@ -33,6 +33,52 @@ public actor GitRootResolver {
 }
 
 public enum SessionGroupingBuilder {
+    public static func isSpecificProjectDirectory(
+        _ rawDir: String?,
+        home: String,
+        isLocal: Bool
+    ) -> Bool {
+        guard let rawDir else { return false }
+        let standardized = (rawDir as NSString).standardizingPath
+        if standardized.isEmpty || standardized == "/" || standardized == "/root" {
+            return false
+        }
+        let cleanHome = (home as NSString).standardizingPath
+        if standardized == cleanHome {
+            return false
+        }
+        let lower = standardized.lowercased()
+        if lower.contains("/documents/codex/") || lower.hasSuffix("/documents/codex") {
+            return false
+        }
+        if lower.hasSuffix("/deepseek-harness/default-workspace") {
+            return false
+        }
+        if lower == "/tmp" || lower == "/private/tmp" || lower == "/var/tmp" || lower.hasPrefix("/private/var/folders/") {
+            return false
+        }
+
+        let genericContainers: Set<String> = [
+            "\(cleanHome)/Desktop",
+            "\(cleanHome)/Downloads",
+            "\(cleanHome)/Documents",
+            "\(cleanHome)/Documents/code",
+            "\(cleanHome)/code",
+            "\(cleanHome)/projects",
+            "\(cleanHome)/work",
+            "\(cleanHome)/workspace"
+        ]
+        if genericContainers.contains(standardized) {
+            if isLocal {
+                let gitExists = FileManager.default.fileExists(atPath: (standardized as NSString).appendingPathComponent(".git"))
+                if !gitExists { return false }
+            } else {
+                return false
+            }
+        }
+        return true
+    }
+
     public static func buildHostGroups(
         sessions: [AgentSession],
         hostStates: [HostID: HostConnectionState],
@@ -54,18 +100,31 @@ public enum SessionGroupingBuilder {
             let hostSessions = byHost[host] ?? []
             let conn = hostStates[host] ?? HostConnectionState(host: host, isOnline: true)
             if hostSessions.isEmpty && host == .local {
-                return HostSessionGroup(host: host, connection: conn, directories: [])
+                return HostSessionGroup(host: host, connection: conn, directories: [], looseSessions: [])
             }
-            var byDir: [String?: [AgentSession]] = [:]
+            let home = homeByHost[host] ?? (host.isLocal ? NSHomeDirectory() : "/home")
+            var byDir: [String: [AgentSession]] = [:]
+            var loose: [AgentSession] = []
             for var session in hostSessions {
                 if !conn.isOnline {
                     session.status = .offline
                 }
-                let key = session.kind.isChatOnly ? nil : (session.groupDirectory ?? session.cwd)
-                byDir[key, default: []].append(session)
+                let candidateDir = session.kind.isChatOnly ? nil : (session.groupDirectory ?? session.cwd)
+                if let dir = candidateDir,
+                   isSpecificProjectDirectory(dir, home: home, isLocal: host.isLocal) {
+                    byDir[dir, default: []].append(session)
+                } else {
+                    loose.append(session)
+                }
             }
 
-            let home = homeByHost[host] ?? (host.isLocal ? NSHomeDirectory() : "/home")
+            let sortedLoose = loose.sorted { a, b in
+                if a.status != b.status {
+                    return a.status < b.status
+                }
+                return a.lastActivityAt > b.lastActivityAt
+            }
+
             let dirGroups: [DirectorySessionGroup] = byDir.map { dir, list in
                 let sortedSessions = list.sorted { a, b in
                     if a.status != b.status {
@@ -73,30 +132,16 @@ public enum SessionGroupingBuilder {
                     }
                     return a.lastActivityAt > b.lastActivityAt
                 }
-                if let dir, !dir.isEmpty {
-                    let name = URL(fileURLWithPath: dir).lastPathComponent
-                    let abbr = FormattingHelpers.abbreviateHome(dir, home: home)
-                    return DirectorySessionGroup(
-                        host: host,
-                        directory: dir,
-                        displayName: name.isEmpty ? dir : name,
-                        abbreviatedPath: abbr,
-                        sessions: sortedSessions
-                    )
-                } else {
-                    return DirectorySessionGroup(
-                        host: host,
-                        directory: nil,
-                        displayName: "对话应用",
-                        abbreviatedPath: "无工作目录",
-                        sessions: sortedSessions
-                    )
-                }
+                let name = URL(fileURLWithPath: dir).lastPathComponent
+                let abbr = FormattingHelpers.abbreviateHome(dir, home: home)
+                return DirectorySessionGroup(
+                    host: host,
+                    directory: dir,
+                    displayName: name.isEmpty ? dir : name,
+                    abbreviatedPath: abbr,
+                    sessions: sortedSessions
+                )
             }.sorted { lhs, rhs in
-                // Put chat apps at the bottom of the host group
-                if (lhs.directory == nil) != (rhs.directory == nil) {
-                    return lhs.directory != nil
-                }
                 let lPinned = pinnedGroupIDs.contains(lhs.id)
                 let rPinned = pinnedGroupIDs.contains(rhs.id)
                 if lPinned != rPinned {
@@ -132,7 +177,7 @@ public enum SessionGroupingBuilder {
                 }
             }
 
-            return HostSessionGroup(host: host, connection: conn, directories: dirGroups)
+            return HostSessionGroup(host: host, connection: conn, directories: dirGroups, looseSessions: sortedLoose)
         }
 
         let orderIndex = Dictionary(uniqueKeysWithValues: customHostOrder.enumerated().map { ($1, $0) })

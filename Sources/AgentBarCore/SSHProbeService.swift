@@ -65,7 +65,7 @@ public enum SSHProbeService {
         let sshDir = (homeDirectory as NSString).appendingPathComponent(".ssh")
         let rootConfig = (sshDir as NSString).appendingPathComponent("config")
         var visitedFiles: Set<String> = []
-        var rawStanzas: [(aliases: [String], hostname: String?, user: String?, port: Int?)] = []
+        var rawStanzas: [(aliases: [String], hostname: String?, user: String?, port: Int?, controlPath: String?)] = []
 
         parseSSHConfigFile(
             path: rootConfig,
@@ -101,6 +101,27 @@ public enum SSHProbeService {
         discoverSSHConfigEntries(homeDirectory: homeDirectory).map(\.alias)
     }
 
+    public static func hasCustomControlPath(alias: String, homeDirectory: String = NSHomeDirectory()) -> Bool {
+        let sshDir = (homeDirectory as NSString).appendingPathComponent(".ssh")
+        let rootConfig = (sshDir as NSString).appendingPathComponent("config")
+        var visitedFiles: Set<String> = []
+        var rawStanzas: [(aliases: [String], hostname: String?, user: String?, port: Int?, controlPath: String?)] = []
+        parseSSHConfigFile(
+            path: rootConfig,
+            sshDirectory: sshDir,
+            homeDirectory: homeDirectory,
+            visited: &visitedFiles,
+            into: &rawStanzas
+        )
+        for stanza in rawStanzas {
+            guard let cp = stanza.controlPath, !cp.isEmpty, cp.lowercased() != "none" else { continue }
+            if stanza.aliases.contains(alias) || stanza.aliases.contains("*") {
+                return true
+            }
+        }
+        return false
+    }
+
     public static func isIgnoredGitOrWildcardHost(alias: String, hostname: String? = nil, user: String? = nil) -> Bool {
         if alias.isEmpty || alias.contains("*") || alias.contains("?") || alias.hasPrefix("!") {
             return true
@@ -131,7 +152,7 @@ public enum SSHProbeService {
         sshDirectory: String,
         homeDirectory: String,
         visited: inout Set<String>,
-        into stanzas: inout [(aliases: [String], hostname: String?, user: String?, port: Int?)]
+        into stanzas: inout [(aliases: [String], hostname: String?, user: String?, port: Int?, controlPath: String?)]
     ) {
         let standardized = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
         guard visited.insert(standardized).inserted,
@@ -143,15 +164,17 @@ public enum SSHProbeService {
         var currentHostname: String?
         var currentUser: String?
         var currentPort: Int?
+        var currentControlPath: String?
 
         func flushCurrent() {
             if !currentAliases.isEmpty {
-                stanzas.append((currentAliases, currentHostname, currentUser, currentPort))
+                stanzas.append((currentAliases, currentHostname, currentUser, currentPort, currentControlPath))
             }
             currentAliases = []
             currentHostname = nil
             currentUser = nil
             currentPort = nil
+            currentControlPath = nil
         }
 
         for rawLine in content.split(whereSeparator: \.isNewline) {
@@ -196,6 +219,8 @@ public enum SSHProbeService {
                 if currentPort == nil, let first = args.first, let p = Int(first) {
                     currentPort = p
                 }
+            case "controlpath":
+                if currentControlPath == nil { currentControlPath = args.first }
             default:
                 break
             }
@@ -266,19 +291,16 @@ list_recent_files() {
   pat="$2"
   limit="$3"
   [ -d "$root" ] || return 0
-  found=$(find "$root" -name "$pat" -type f -mtime -14 2>/dev/null | head -n "$limit")
-  if [ -z "$found" ]; then
-    found=$(find "$root" -name "$pat" -type f 2>/dev/null | head -n "$limit")
-  fi
-  printf "%s\n" "$found"
+  find "$root" -name "$pat" -type f ! -path '*/subagents/*' -exec ls -1t {} + 2>/dev/null | head -n "$limit"
 }
 
 if [ -d "$HOME/.claude/projects" ]; then
-  list_recent_files "$HOME/.claude/projects" '*.jsonl' 18 | while IFS= read -r f; do
+  list_recent_files "$HOME/.claude/projects" '*.jsonl' 12 | while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now_ts")
     printf "@@BEGIN claude %s %s\n" "$mt" "$f"
-    tail -c 400000 "$f" 2>/dev/null
+    head -n 3 "$f" 2>/dev/null
+    tail -c 120000 "$f" 2>/dev/null
     printf "\n@@END\n"
   done
 fi
@@ -290,18 +312,18 @@ if [ -f "$HOME/.codex/session_index.jsonl" ]; then
 fi
 
 if [ -d "$HOME/.codex/sessions" ]; then
-  list_recent_files "$HOME/.codex/sessions" 'rollout-*.jsonl' 18 | while IFS= read -r f; do
+  list_recent_files "$HOME/.codex/sessions" 'rollout-*.jsonl' 12 | while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now_ts")
     printf "@@BEGIN codex %s %s\n" "$mt" "$f"
-    head -n 1 "$f" 2>/dev/null
-    tail -c 400000 "$f" 2>/dev/null
+    head -n 3 "$f" 2>/dev/null
+    tail -c 120000 "$f" 2>/dev/null
     printf "\n@@END\n"
   done
 fi
 
 if [ -d "$HOME/.dsh/storages/session_projcache/sessions" ]; then
-  list_recent_files "$HOME/.dsh/storages/session_projcache/sessions" '*.json' 18 | while IFS= read -r f; do
+  list_recent_files "$HOME/.dsh/storages/session_projcache/sessions" '*.json' 12 | while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now_ts")
     printf "@@BEGIN dsh %s %s\n" "$mt" "$f"
@@ -311,7 +333,7 @@ if [ -d "$HOME/.dsh/storages/session_projcache/sessions" ]; then
 fi
 
 printf "@@BEGIN procs 0 ps\n"
-ps -eo pid=,pcpu=,rss=,tty=,args= 2>/dev/null | grep -E '(^|[ /])(claude|codex|dsh|cursor-server|trae-server)( |$)' | grep -v 'grep' | head -n 25 | while IFS= read -r line; do
+ps -eo pid=,pcpu=,rss=,tty=,args= 2>/dev/null | grep -E '(^|[ /])(claude|codex|dsh)( |$)' | grep -v 'grep' | head -n 20 | while IFS= read -r line; do
   pid=$(printf "%s" "$line" | awk '{print $1}')
   cwd=""
   if [ -n "$pid" ] && [ -d "/proc/$pid/cwd" ]; then
@@ -338,22 +360,30 @@ fi
     ) async -> SSHProbeResult {
         let hostID = HostID.ssh(alias: alias)
         HookApprovalManager.ensureDirectories()
-        let controlPath = sharedControlPathPattern
+        let scriptB64 = Data(posixProbeScript.utf8).base64EncodedString()
+        let remoteCmd = "printf '%s' '\(scriptB64)' | (base64 -d 2>/dev/null || base64 -D) | sh"
         let start = Date()
+
+        var args = [
+            "-n",
+            "-o", "ClearAllForwardings=yes",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=6"
+        ]
+        if !hasCustomControlPath(alias: alias) {
+            args += [
+                "-o", "ControlMaster=auto",
+                "-o", "ControlPath=\(sharedControlPathPattern)",
+                "-o", "ControlPersist=10m"
+            ]
+        }
+        args += [alias, remoteCmd]
 
         let runResult = await runProcess(
             executable: "/usr/bin/ssh",
-            arguments: [
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=6",
-                "-o", "ControlMaster=auto",
-                "-o", "ControlPath=\(controlPath)",
-                "-o", "ControlPersist=10m",
-                alias,
-                "sh -s"
-            ],
-            stdinData: Data(posixProbeScript.utf8),
-            timeoutSeconds: 12
+            arguments: args,
+            stdinData: nil,
+            timeoutSeconds: 22
         )
 
         let latencyMs = Int(Date().timeIntervalSince(start) * 1000.0)
@@ -395,19 +425,22 @@ fi
 
     public static func sendRemoteDecision(alias: String, requestID: String, jsonData: Data) async throws {
         let safeID = requestID.filter { $0.isLetter || $0.isNumber || $0 == "-" || $0 == "_" }
-        let controlPath = sharedControlPathPattern
         let remoteCmd = "mkdir -p ~/.agentbar/decisions && cat > ~/.agentbar/decisions/\(safeID).json && rm -f ~/.agentbar/pending/\(safeID).json"
+        var args = [
+            "-o", "ClearAllForwardings=yes",
+            "-o", "BatchMode=yes",
+            "-o", "ConnectTimeout=6"
+        ]
+        if !hasCustomControlPath(alias: alias) {
+            args += [
+                "-o", "ControlMaster=no",
+                "-o", "ControlPath=\(sharedControlPathPattern)"
+            ]
+        }
+        args += [alias, remoteCmd]
         let res = await runProcess(
             executable: "/usr/bin/ssh",
-            arguments: [
-                "-o", "BatchMode=yes",
-                "-o", "ConnectTimeout=6",
-                "-o", "ControlMaster=auto",
-                "-o", "ControlPath=\(controlPath)",
-                "-o", "ControlPersist=5m",
-                alias,
-                remoteCmd
-            ],
+            arguments: args,
             stdinData: jsonData,
             timeoutSeconds: 10
         )
@@ -429,7 +462,7 @@ fi
         var remoteHome: String?
         var codexTitles: [String: String] = [:]
         var blocks: [(kind: String, mtime: Date, path: String, body: String)] = []
-        let cutoff = Date().addingTimeInterval(-max(24, lookbackHours) * 3600)
+        let cutoff = Date().addingTimeInterval(-max(720, lookbackHours) * 3600)
 
         var currentHeader: (kind: String, mtime: Date, path: String)?
         var currentLines: [Substring] = []
@@ -577,7 +610,6 @@ fi
         into sessions: inout [AgentSession],
         host: HostID
     ) {
-        var unmatchedCursorDirs: Set<String> = []
         for proc in procs {
             let lowerCmd = proc.command.lowercased()
             if let idx = sessions.firstIndex(where: { s in
@@ -591,26 +623,6 @@ fi
                 return false
             }) {
                 sessions[idx].process = proc
-            } else if lowerCmd.contains("cursor-server") || lowerCmd.contains("trae-server") {
-                let isTrae = lowerCmd.contains("trae-server")
-                let dir = proc.cwd
-                let dedupKey = "\(isTrae ? "trae" : "cursor"):\(dir ?? "server")"
-                guard unmatchedCursorDirs.insert(dedupKey).inserted else { continue }
-                sessions.append(AgentSession(
-                    id: "\(host.storageKey):remote-ide:\(dedupKey)",
-                    rawSessionID: "pid-\(proc.pid)",
-                    kind: isTrae ? .trae : .cursor,
-                    host: host,
-                    title: isTrae ? "Trae Remote-SSH 服务运行中" : "Cursor Remote-SSH 服务运行中",
-                    overview: "PID \(proc.pid) · 内存 \(FormattingHelpers.memoryString(proc.memoryBytes))",
-                    status: .runningProcessOnly,
-                    cwd: dir,
-                    groupDirectory: dir,
-                    process: proc,
-                    startedAt: Date(),
-                    lastActivityAt: Date(),
-                    isSeen: true
-                ))
             }
         }
     }
@@ -662,10 +674,79 @@ fi
                     proc.standardInput = inPipe
                 }
 
+                final class PipeIOBox: @unchecked Sendable {
+                    var outData = Data()
+                    var errData = Data()
+                    var finished = false
+                }
+
+                let ioQueue = DispatchQueue(label: "com.agentbar.ssh.pipe-io")
+                let state = PipeIOBox()
+
+                let outReadHandle = outPipe.fileHandleForReading
+                let errReadHandle = errPipe.fileHandleForReading
+                let outFD = outReadHandle.fileDescriptor
+                let errFD = errReadHandle.fileDescriptor
+
+                outReadHandle.readabilityHandler = { handle in
+                    let chunk = handle.availableData
+                    ioQueue.async {
+                        if chunk.isEmpty {
+                            handle.readabilityHandler = nil
+                        } else if !state.finished {
+                            state.outData.append(chunk)
+                        }
+                    }
+                }
+                errReadHandle.readabilityHandler = { handle in
+                    let chunk = handle.availableData
+                    ioQueue.async {
+                        if chunk.isEmpty {
+                            handle.readabilityHandler = nil
+                        } else if !state.finished {
+                            state.errData.append(chunk)
+                        }
+                    }
+                }
+
+                let timer = DispatchSource.makeTimerSource(queue: ioQueue)
+
+                @Sendable func finish(status: Int32, timedOut: Bool) {
+                    guard !state.finished else { return }
+                    state.finished = true
+                    timer.cancel()
+                    outReadHandle.readabilityHandler = nil
+                    errReadHandle.readabilityHandler = nil
+                    drainNonBlocking(fd: outFD, into: &state.outData)
+                    drainNonBlocking(fd: errFD, into: &state.errData)
+                    try? outReadHandle.close()
+                    try? errReadHandle.close()
+
+                    let outStr = String(data: state.outData, encoding: .utf8) ?? ""
+                    var errStr = String(data: state.errData, encoding: .utf8) ?? ""
+                    if timedOut && errStr.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        errStr = "连接超时"
+                    }
+                    continuation.resume(returning: (status, outStr, errStr))
+                }
+
+                proc.terminationHandler = { exitedProc in
+                    ioQueue.async {
+                        finish(status: exitedProc.terminationStatus, timedOut: false)
+                    }
+                }
+
                 do {
                     try proc.run()
                 } catch {
-                    continuation.resume(returning: (-1, "", error.localizedDescription))
+                    ioQueue.async {
+                        guard !state.finished else { return }
+                        state.finished = true
+                        timer.cancel()
+                        outReadHandle.readabilityHandler = nil
+                        errReadHandle.readabilityHandler = nil
+                        continuation.resume(returning: (-1, "", error.localizedDescription))
+                    }
                     return
                 }
 
@@ -674,23 +755,34 @@ fi
                     try? inPipe.fileHandleForWriting.close()
                 }
 
-                let timer = DispatchSource.makeTimerSource()
                 timer.schedule(deadline: .now() + timeoutSeconds)
                 timer.setEventHandler {
-                    if proc.isRunning { proc.terminate() }
+                    if proc.isRunning {
+                        let pid = proc.processIdentifier
+                        proc.terminate()
+                        if pid > 0 {
+                            kill(pid, SIGKILL)
+                        }
+                    }
+                    finish(status: -1, timedOut: true)
                 }
                 timer.resume()
+            }
+        }
+    }
 
-                let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
-                let errData = errPipe.fileHandleForReading.readDataToEndOfFile()
-                proc.waitUntilExit()
-                timer.cancel()
-
-                continuation.resume(returning: (
-                    proc.terminationStatus,
-                    String(data: outData, encoding: .utf8) ?? "",
-                    String(data: errData, encoding: .utf8) ?? ""
-                ))
+    private static func drainNonBlocking(fd: Int32, into buffer: inout Data) {
+        guard fd >= 0 else { return }
+        let oldFlags = fcntl(fd, F_GETFL)
+        guard oldFlags != -1 else { return }
+        _ = fcntl(fd, F_SETFL, oldFlags | O_NONBLOCK)
+        var chunk = [UInt8](repeating: 0, count: 16384)
+        while true {
+            let n = Darwin.read(fd, &chunk, chunk.count)
+            if n > 0 {
+                buffer.append(contentsOf: chunk.prefix(n))
+            } else {
+                break
             }
         }
     }

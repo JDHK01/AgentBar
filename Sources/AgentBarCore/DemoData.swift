@@ -176,16 +176,19 @@ public enum DemoData {
         )
 
         let s6 = AgentSession(
-            id: "demo:chat:doubao",
-            rawSessionID: "doubao-1",
-            kind: .doubao,
+            id: "demo:loose:codex-note",
+            rawSessionID: "demo-loose-01",
+            kind: .codexDesktop,
             host: .local,
-            title: "周报润色与指标总结",
-            overview: "窗口标题 · 前台运行中",
-            status: .runningProcessOnly,
+            title: "技术分享大纲与架构问答",
+            overview: "已输出 5 节提纲与关键设计权衡说明",
+            status: .completed,
+            provider: "OpenAI",
+            model: "gpt-5-codex",
+            usage: TokenUsage(input: 18_400, output: 3_200, cacheRead: 64_000),
             startedAt: now.addingTimeInterval(-1800),
-            lastActivityAt: now,
-            isSeen: true
+            lastActivityAt: now.addingTimeInterval(-120),
+            isSeen: false
         )
 
         let s7 = AgentSession(

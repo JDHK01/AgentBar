@@ -174,6 +174,15 @@ public enum HookApprovalManager {
         return ("~/.agentbar/bin/agentbar-hook" as NSString).expandingTildeInPath
     }
 
+    public static func isClaudeHooksInstalled() -> Bool {
+        let settingsURL = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent(".claude/settings.json")
+        guard let text = try? String(contentsOf: settingsURL, encoding: .utf8) else {
+            return false
+        }
+        return text.contains("agentbar-hook")
+    }
+
     public static func previewClaudeHooksJSON(hookExecutablePath: String) -> String {
         let escaped = hookExecutablePath.replacingOccurrences(of: "\"", with: "\\\"")
         return """

@@ -477,31 +477,82 @@ public struct HostSessionGroup: Identifiable, Hashable, Sendable {
     public var host: HostID
     public var connection: HostConnectionState
     public var directories: [DirectorySessionGroup]
+    public var looseSessions: [AgentSession]
 
     public init(
         host: HostID,
         connection: HostConnectionState,
-        directories: [DirectorySessionGroup]
+        directories: [DirectorySessionGroup],
+        looseSessions: [AgentSession] = []
     ) {
         self.host = host
         self.connection = connection
         self.directories = directories
+        self.looseSessions = looseSessions
+    }
+
+    public var isEmpty: Bool {
+        directories.isEmpty && looseSessions.isEmpty
     }
 
     public var totalSessionCount: Int {
-        directories.reduce(0) { $0 + $1.sessions.count }
+        directories.reduce(0) { $0 + $1.sessions.count } + looseSessions.count
     }
 
     public var mostUrgentStatus: SessionStatus {
-        directories.map(\.mostUrgentStatus).min() ?? .idle
+        let dirMin = directories.map(\.mostUrgentStatus).min()
+        let looseMin = looseSessions.map(\.status).min()
+        switch (dirMin, looseMin) {
+        case let (a?, b?): return min(a, b)
+        case let (a?, nil): return a
+        case let (nil, b?): return b
+        case (nil, nil): return .idle
+        }
     }
 
     public var lastActivityAt: Date {
-        directories.map(\.lastActivityAt).max() ?? .distantPast
+        let dirMax = directories.map(\.lastActivityAt).max() ?? .distantPast
+        let looseMax = looseSessions.map(\.lastActivityAt).max() ?? .distantPast
+        return max(dirMax, looseMax)
     }
 
     public var totalTokens: Int {
-        directories.reduce(0) { $0 + $1.totalTokens }
+        directories.reduce(0) { $0 + $1.totalTokens } + looseSessions.reduce(0) { $0 + $1.usage.totalTokens }
+    }
+}
+
+public enum StatusCategoryFilter: String, Codable, CaseIterable, Identifiable, Sendable {
+    case completedUnseen
+    case awaitingApproval
+    case failed
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .completedUnseen: return "新生成"
+        case .awaitingApproval: return "待审批"
+        case .failed: return "错误"
+        }
+    }
+
+    public var representativeStatus: SessionStatus {
+        switch self {
+        case .completedUnseen: return .completed
+        case .awaitingApproval: return .awaitingApproval
+        case .failed: return .failed
+        }
+    }
+
+    public func matches(_ session: AgentSession) -> Bool {
+        switch self {
+        case .completedUnseen:
+            return session.status == .completed && !session.isSeen
+        case .awaitingApproval:
+            return session.status == .awaitingApproval
+        case .failed:
+            return session.status == .failed
+        }
     }
 }
 

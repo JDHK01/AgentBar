@@ -118,6 +118,48 @@ struct MetricChipView: View {
     }
 }
 
+struct StatusFilterPillView: View {
+    let category: StatusCategoryFilter
+    let count: Int
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        let color = StatusPalette.color(for: category.representativeStatus)
+        let textColor = StatusPalette.textColor(for: category.representativeStatus)
+        Button(action: action) {
+            HStack(spacing: 5) {
+                Circle()
+                    .fill(color)
+                    .frame(width: 7, height: 7)
+                Text(category.title)
+                    .font(.system(size: 11, weight: isSelected ? .bold : .medium))
+                    .foregroundStyle(isSelected ? textColor : .primary.opacity(0.86))
+                Text("\(count)")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(count > 0 || isSelected ? textColor : .secondary)
+            }
+            .fixedSize()
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                Capsule()
+                    .fill(isSelected ? color.opacity(0.24) : .white.opacity(0.32))
+                    .overlay(
+                        Capsule()
+                            .strokeBorder(
+                                isSelected ? color.opacity(0.88) : .white.opacity(0.58),
+                                lineWidth: isSelected ? 1.3 : 0.6
+                            )
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help(isSelected ? "再次点击取消过滤" : "点击仅查看“\(category.title)”状态的会话")
+    }
+}
+
 struct BalanceCardView: View {
     let reading: BalanceReading
     var onOpenDashboard: (() -> Void)? = nil

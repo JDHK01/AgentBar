@@ -14,7 +14,7 @@ struct AgentBarHookMain {
             handleClaudePermission(json: json)
         case "self-test":
             Task {
-                await runSelfTest()
+                await runSelfTest(probeSSH: args.contains("--probe-ssh"))
                 Foundation.exit(0)
             }
             RunLoop.main.run()
@@ -24,7 +24,7 @@ struct AgentBarHookMain {
         }
     }
 
-    private static func runSelfTest() async {
+    private static func runSelfTest(probeSSH: Bool = false) async {
         let jsonl = """
         {"type":"user","cwd":"/Users/test/repo","sessionId":"s-1","timestamp":"2026-11-19T04:00:00.000Z","message":{"role":"user","content":"帮我修 bug"}}
         {"type":"ai-title","aiTitle":"修复加载器崩溃","sessionId":"s-1"}
@@ -53,6 +53,19 @@ struct AgentBarHookMain {
         let realCursor = await CursorTraeAdapter.loadLocalSessions(lookbackHours: 168)
         let sshEntries = SSHProbeService.discoverSSHConfigEntries()
         print("PASS self-test | local sessions -> claude=\(realClaude.count), codex=\(realCodex.count), dsh=\(realDSH.count), cursor=\(realCursor.count), ssh_hosts=\(sshEntries.count)")
+        if probeSSH {
+            await withTaskGroup(of: (Int, SSHProbeResult).self) { group in
+                for (idx, cfg) in sshEntries.enumerated() {
+                    group.addTask {
+                        let res = await SSHProbeService.probeHost(alias: cfg.alias, lookbackHours: 168)
+                        return (idx, res)
+                    }
+                }
+                for await (idx, res) in group {
+                    print("SSH host #\(idx): online=\(res.connection.isOnline), latency=\(res.connection.latencyMs ?? -1)ms, sessions=\(res.sessions.count), err=\(res.connection.errorMessage ?? "none")")
+                }
+            }
+        }
     }
 
     private static func handleClaudePermission(json: [String: Any]) {

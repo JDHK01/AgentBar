@@ -11,9 +11,6 @@ struct OverviewDashboardView: View {
             subscriptionsAndDashboardsSection
             todayHeroCard(stats)
             efficiencyGrid(stats)
-            if !stats.byTool.isEmpty {
-                toolBreakdownSection(stats.byTool)
-            }
             if !stats.byModel.isEmpty {
                 modelBreakdownSection(stats.byModel)
             }
@@ -260,51 +257,6 @@ struct OverviewDashboardView: View {
                         .strokeBorder(.white.opacity(0.48), lineWidth: 0.5)
                 )
         )
-    }
-
-    private func toolBreakdownSection(_ items: [ToolBreakdownItem]) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Label("按工具 / Harness 统计", systemImage: "cpu")
-                .font(.system(size: 12, weight: .bold))
-
-            VStack(spacing: 5) {
-                ForEach(items) { item in
-                    HStack(spacing: 8) {
-                        AgentLogoView(kind: item.kind, size: 20)
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack {
-                                Text(item.kind.displayName)
-                                    .font(.system(size: 11.5, weight: .semibold))
-                                Text("\(item.sessionCount) 会话")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text(FormattingHelpers.compactTokens(item.totalTokens))
-                                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                    .monospacedDigit()
-                                if item.estimatedCostUSD > 0 {
-                                    Text(String(format: "· $%.2f", item.estimatedCostUSD))
-                                        .font(.system(size: 10.5))
-                                        .foregroundStyle(.secondary)
-                                        .monospacedDigit()
-                                }
-                            }
-                            GeometryReader { geo in
-                                ZStack(alignment: .leading) {
-                                    Capsule().fill(Color.primary.opacity(0.08))
-                                    Capsule()
-                                        .fill(Color.accentColor.opacity(0.82))
-                                        .frame(width: max(4, geo.size.width * min(1, max(0, item.share))))
-                                }
-                            }
-                            .frame(height: 4)
-                        }
-                    }
-                }
-            }
-            .padding(10)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(0.26)))
-        }
     }
 
     private func modelBreakdownSection(_ items: [ModelBreakdownItem]) -> some View {
