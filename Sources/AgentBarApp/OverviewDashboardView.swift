@@ -24,19 +24,45 @@ struct OverviewDashboardView: View {
     }
 
     private var subscriptionsAndDashboardsSection: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        let mins = Int(max(1, round(model.dashboardRefreshIntervalSeconds / 60.0)))
+        return VStack(alignment: .leading, spacing: 7) {
             HStack {
                 Label("订阅会员 & Dashboard", systemImage: "sparkles.tv")
                     .font(.system(size: 12, weight: .bold))
                 Spacer()
-                Button {
-                    Task { await model.refreshBalances() }
+                Menu {
+                    Section("Dashboard 自动刷新频率") {
+                        ForEach([60.0, 180.0, 300.0, 900.0], id: \.self) { sec in
+                            let label = "每 \(Int(sec / 60)) 分钟自动刷新"
+                            Button {
+                                model.dashboardRefreshIntervalSeconds = sec
+                            } label: {
+                                if abs(model.dashboardRefreshIntervalSeconds - sec) < 1 {
+                                    Label(label, systemImage: "checkmark")
+                                } else {
+                                    Text(label)
+                                }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("立即刷新 Dashboard 额度") {
+                        Task { await model.refreshBalances(silent: false) }
+                    }
                 } label: {
-                    Text("刷新额度")
-                        .font(.system(size: 10.5, weight: .medium))
+                    HStack(spacing: 3) {
+                        Image(systemName: model.isRefreshingBalances ? "arrow.trianglehead.2.clockwise" : "clock.arrow.circlepath")
+                            .font(.system(size: 9.5, weight: .semibold))
+                        Text(model.isRefreshingBalances ? "刷新中…" : "自动 \(mins)m")
+                            .font(.system(size: 10.5, weight: .medium))
+                            .monospacedDigit()
+                    }
+                    .fixedSize()
                 }
+                .menuStyle(.button)
                 .controlSize(.mini)
                 .buttonStyle(.glass)
+                .help("后台每 \(mins) 分钟自动刷新一次 Dashboard 额度，点击可调整频率或立即刷新")
 
                 Button {
                     onOpenDashboardSettings()
@@ -55,7 +81,7 @@ struct OverviewDashboardView: View {
                     spacing: 7
                 ) {
                     ForEach(model.balanceReadings) { reading in
-                        BalanceCardView(reading: reading) {
+                        BalanceCardView(reading: reading, isRefreshing: model.isRefreshingBalances) {
                             model.openDashboardWindow(for: reading)
                         }
                     }

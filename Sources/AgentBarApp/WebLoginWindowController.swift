@@ -100,6 +100,7 @@ final class WebBalanceExtractor: NSObject, WKNavigationDelegate {
     private var pendingExpression: String = ""
     private var targetHost: String?
     private var pollTask: Task<Void, Never>?
+    private var watchdogTask: Task<Void, Never>?
 
     func openInteractiveLoginWindow(
         urlString: String,
@@ -159,6 +160,29 @@ final class WebBalanceExtractor: NSObject, WKNavigationDelegate {
 
         return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, Error>) in
             self.pendingContinuation = cont
+            self.watchdogTask?.cancel()
+            self.watchdogTask = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(20))
+                guard let self, !Task.isCancelled, let activeCont = self.pendingContinuation else { return }
+                self.pollTask?.cancel()
+                var fallback = ""
+                if let activeWV = self.headlessWebView,
+                   let res = try? await activeWV.evaluateJavaScript(expr) {
+                    fallback = "\(res)"
+                }
+                guard self.pendingContinuation != nil else { return }
+                self.pendingContinuation = nil
+                self.headlessWebView = nil
+                if !fallback.isEmpty {
+                    activeCont.resume(returning: fallback)
+                } else {
+                    activeCont.resume(throwing: NSError(
+                        domain: "WebBalanceExtractor",
+                        code: -1001,
+                        userInfo: [NSLocalizedDescriptionKey: "页面响应超时"]
+                    ))
+                }
+            }
             wv.load(URLRequest(url: url, timeoutInterval: 18))
         }
     }
@@ -220,6 +244,8 @@ final class WebBalanceExtractor: NSObject, WKNavigationDelegate {
             }
             guard let cont = self.pendingContinuation else { return }
             self.pendingContinuation = nil
+            self.watchdogTask?.cancel()
+            self.watchdogTask = nil
             cont.resume(returning: lastString)
             self.headlessWebView = nil
         }
@@ -228,6 +254,8 @@ final class WebBalanceExtractor: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         guard webView === headlessWebView else { return }
         pollTask?.cancel()
+        watchdogTask?.cancel()
+        watchdogTask = nil
         if let cont = pendingContinuation {
             pendingContinuation = nil
             cont.resume(throwing: error)
@@ -238,6 +266,8 @@ final class WebBalanceExtractor: NSObject, WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         guard webView === headlessWebView else { return }
         pollTask?.cancel()
+        watchdogTask?.cancel()
+        watchdogTask = nil
         if let cont = pendingContinuation {
             pendingContinuation = nil
             cont.resume(throwing: error)

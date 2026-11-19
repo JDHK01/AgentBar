@@ -14,8 +14,16 @@ final class AppModel {
     var probingHostIDs: Set<HostID> = []
     var balanceReadings: [BalanceReading] = []
     var subscriptionCards: [SubscriptionCardItem] = []
+    var isRefreshingBalances: Bool = false
+    var lastBalanceRefreshAt: Date?
 
-    var isShowingOverview: Bool = false
+    var isShowingOverview: Bool = false {
+        didSet {
+            if isShowingOverview {
+                refreshBalancesIfStale(maxAge: min(60, dashboardRefreshIntervalSeconds))
+            }
+        }
+    }
     var selectedSettingsTab: Int = 0
     var selectedCategory: StatusCategoryFilter? = nil {
         didSet {
@@ -67,12 +75,23 @@ final class AppModel {
         didSet { UserDefaults.standard.set(notificationsEnabled, forKey: "notificationsEnabled") }
     }
 
+    var dashboardRefreshIntervalSeconds: Double = 180 {
+        didSet {
+            UserDefaults.standard.set(dashboardRefreshIntervalSeconds, forKey: "dashboardRefreshIntervalSeconds")
+            restartBalancePolling()
+        }
+    }
+
     var sshHosts: [SSHHostConfig] = [] {
         didSet { saveCodable(sshHosts, key: "sshHosts") }
     }
 
     var balanceSources: [BalanceSourceConfig] = [] {
-        didSet { saveCodable(balanceSources, key: "balanceSources") }
+        didSet {
+            saveCodable(balanceSources, key: "balanceSources")
+            let validIDs = Set(balanceSources.filter(\.isEnabled).map(\.id))
+            balanceReadings.removeAll { !validIDs.contains($0.sourceID) }
+        }
     }
 
     var isRefreshing: Bool = false
@@ -101,6 +120,7 @@ final class AppModel {
     private var notifiedApprovalIDs: Set<String> = []
     private var localPollTask: Task<Void, Never>?
     private var sshPollTask: Task<Void, Never>?
+    private var balancePollTask: Task<Void, Never>?
     private var lastSSHProbeAt: Date?
 
     init() {
@@ -470,10 +490,23 @@ final class AppModel {
 
     func refreshOnPanelOpen() async {
         guard !demoModeEnabled else { return }
+        refreshBalancesIfStale(maxAge: min(60, dashboardRefreshIntervalSeconds))
         await refreshLocalSessions()
         let needsSSH = lastSSHProbeAt == nil || Date().timeIntervalSince(lastSSHProbeAt!) > 12
         if needsSSH {
             await refreshSSHHosts()
+        }
+    }
+
+    func refreshBalancesIfStale(maxAge: TimeInterval) {
+        guard !demoModeEnabled, !isRefreshingBalances else { return }
+        let enabled = balanceSources.filter(\.isEnabled)
+        guard !enabled.isEmpty else { return }
+        let isStale = lastBalanceRefreshAt == nil
+            || balanceReadings.isEmpty
+            || Date().timeIntervalSince(lastBalanceRefreshAt!) >= maxAge
+        if isStale {
+            Task { await refreshBalances(silent: true) }
         }
     }
 
@@ -609,21 +642,36 @@ final class AppModel {
         notifyStatusBar()
     }
 
-    func refreshBalances() async {
-        guard !demoModeEnabled else { return }
+    func refreshBalances(silent: Bool = false) async {
+        guard !demoModeEnabled, !isRefreshingBalances else { return }
         let enabled = balanceSources.filter(\.isEnabled)
         guard !enabled.isEmpty else {
             balanceReadings = []
+            saveCodable(balanceReadings, key: "cachedBalanceReadings")
             return
         }
+        isRefreshingBalances = true
+        defer { isRefreshingBalances = false }
+
+        let previousByID = Dictionary(uniqueKeysWithValues: balanceReadings.map { ($0.sourceID, $0) })
         var updated: [BalanceReading] = []
         for src in enabled {
             let reading = await BalanceService.fetchReading(for: src) { url, expr in
                 try await WebBalanceExtractor.shared.evaluateOnPage(url: url, jsOrSelector: expr)
             }
-            updated.append(reading)
+            if silent,
+               reading.formattedValue == "获取失败",
+               let prev = previousByID[src.id],
+               !prev.needsLogin,
+               prev.formattedValue != "获取失败" {
+                updated.append(prev)
+            } else {
+                updated.append(reading)
+            }
         }
         balanceReadings = updated
+        lastBalanceRefreshAt = Date()
+        saveCodable(updated, key: "cachedBalanceReadings")
     }
 
     func openDashboardWindow(for reading: BalanceReading) {
@@ -649,6 +697,8 @@ final class AppModel {
             } else {
                 self.balanceReadings.append(updatedReading)
             }
+            self.lastBalanceRefreshAt = Date()
+            self.saveCodable(self.balanceReadings, key: "cachedBalanceReadings")
             self.balanceTestMessage[source.id] = "已自动同步：\(updatedReading.formattedValue)"
         }
     }
@@ -706,6 +756,19 @@ final class AppModel {
                 try? await Task.sleep(for: .seconds(25))
                 guard let self, !self.demoModeEnabled else { continue }
                 await self.refreshSSHHosts()
+            }
+        }
+        restartBalancePolling()
+    }
+
+    private func restartBalancePolling() {
+        balancePollTask?.cancel()
+        let interval = max(30, dashboardRefreshIntervalSeconds)
+        balancePollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(interval))
+                guard !Task.isCancelled, let self, !self.demoModeEnabled else { continue }
+                await self.refreshBalances(silent: true)
             }
         }
     }
@@ -811,6 +874,8 @@ final class AppModel {
         demoModeEnabled = ud.bool(forKey: "demoModeEnabled")
         let savedLookback = ud.double(forKey: "lookbackHours")
         if savedLookback > 0 { lookbackHours = savedLookback }
+        let savedDashInterval = ud.double(forKey: "dashboardRefreshIntervalSeconds")
+        if savedDashInterval >= 30 { dashboardRefreshIntervalSeconds = savedDashInterval }
         includeSubagents = ud.bool(forKey: "includeSubagents")
         if ud.object(forKey: "notificationsEnabled") != nil {
             notificationsEnabled = ud.bool(forKey: "notificationsEnabled")
@@ -845,6 +910,11 @@ final class AppModel {
         }
         if let sources: [BalanceSourceConfig] = loadCodable(key: "balanceSources") {
             balanceSources = sources
+        }
+        if let cachedReadings: [BalanceReading] = loadCodable(key: "cachedBalanceReadings"),
+           !cachedReadings.isEmpty {
+            let validIDs = Set(balanceSources.filter(\.isEnabled).map(\.id))
+            balanceReadings = cachedReadings.filter { validIDs.contains($0.sourceID) }
         }
     }
 

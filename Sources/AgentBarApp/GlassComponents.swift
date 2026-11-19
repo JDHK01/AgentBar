@@ -162,9 +162,14 @@ struct StatusFilterPillView: View {
 
 struct BalanceCardView: View {
     let reading: BalanceReading
+    var isRefreshing: Bool = false
     var onOpenDashboard: (() -> Void)? = nil
 
     var body: some View {
+        let timeTag = reading.needsLogin ? "" : " · \(FormattingHelpers.relativeDuration(since: reading.updatedAt))"
+        let cleanFoot = reading.footnote
+            .replacingOccurrences(of: " · 刚刚", with: "")
+            .replacingOccurrences(of: "刚刚更新", with: "自动同步")
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 4) {
                 Text(reading.name)
@@ -172,6 +177,11 @@ struct BalanceCardView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                 Spacer(minLength: 2)
+                if isRefreshing {
+                    Image(systemName: "arrow.trianglehead.2.clockwise")
+                        .font(.system(size: 9.5, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
                 if reading.sourceType == .webExtract, onOpenDashboard != nil {
                     Image(systemName: reading.needsLogin ? "person.badge.key.fill" : "arrow.up.right.square")
                         .font(.system(size: 10.5, weight: .semibold))
@@ -203,7 +213,7 @@ struct BalanceCardView: View {
                 .padding(.vertical, 1)
             }
 
-            Text(reading.footnote)
+            Text(cleanFoot + timeTag)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

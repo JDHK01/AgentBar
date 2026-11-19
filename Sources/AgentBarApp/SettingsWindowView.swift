@@ -211,6 +211,14 @@ struct SettingsWindowView: View {
                     .font(.system(size: 12))
                     .foregroundStyle(.secondary)
                 Spacer()
+                Picker("自动刷新", selection: $model.dashboardRefreshIntervalSeconds) {
+                    Text("每 1 分钟").tag(60.0)
+                    Text("每 3 分钟").tag(180.0)
+                    Text("每 5 分钟").tag(300.0)
+                    Text("每 15 分钟").tag(900.0)
+                }
+                .frame(width: 155)
+
                 Button("+ 添加 DeepSeek 模板") {
                     model.balanceSources.append(.deepSeekPreset)
                 }

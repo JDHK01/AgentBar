@@ -364,7 +364,7 @@ struct PanelView: View {
                 spacing: 7
             ) {
                 ForEach(model.balanceReadings) { reading in
-                    BalanceCardView(reading: reading) {
+                    BalanceCardView(reading: reading, isRefreshing: model.isRefreshingBalances) {
                         model.openDashboardWindow(for: reading)
                     }
                 }
