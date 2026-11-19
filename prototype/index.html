@@ -1,0 +1,667 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgentBar 原型 v0.2</title>
+<style>
+:root {
+  --blue: #0a84ff;
+  --yellow: #ff9f0a;
+  --green: #30d158;
+  --red: #ff453a;
+  --gray: #8e8e93;
+  --text: #1d1d1f;
+  --sub: #55555a;
+  --faint: #7c7c82;
+  --hairline: rgba(255, 255, 255, .55);
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font: 13px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang SC", sans-serif;
+  color: var(--text);
+  min-height: 100vh;
+  background:
+    radial-gradient(1100px 700px at 12% 18%, #3f86e0 0%, transparent 60%),
+    radial-gradient(900px 700px at 88% 22%, #f2a06b 0%, transparent 55%),
+    radial-gradient(1000px 800px at 62% 92%, #7a4fd1 0%, transparent 60%),
+    linear-gradient(160deg, #0f2a4d, #1c3f73 40%, #4b3a8f 75%, #a35b8a);
+}
+code { font: 11px ui-monospace, "SF Mono", Menlo, monospace; background: rgba(255, 255, 255, .45); padding: 0 4px; border-radius: 4px; }
+svg.i { width: 14px; height: 14px; flex: none; }
+
+.glass {
+  background: linear-gradient(180deg, rgba(255, 255, 255, .6), rgba(255, 255, 255, .44));
+  backdrop-filter: blur(28px) saturate(185%);
+  -webkit-backdrop-filter: blur(28px) saturate(185%);
+  border: 1px solid var(--hairline);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .9), inset 0 -1px 1px rgba(255, 255, 255, .25), 0 30px 70px rgba(10, 20, 40, .35), 0 0 0 .5px rgba(0, 0, 0, .08);
+}
+.glass-inner {
+  background: rgba(255, 255, 255, .4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .85), inset 0 0 0 .5px rgba(255, 255, 255, .6), 0 1px 3px rgba(0, 0, 0, .06);
+}
+
+.menubar {
+  height: 30px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 14px; color: #fff; font-weight: 500; text-shadow: 0 1px 2px rgba(0, 0, 0, .25);
+}
+.menubar .group { display: flex; align-items: center; gap: 18px; }
+.menubar .bold { font-weight: 700; }
+.mb-agent { display: inline-flex; align-items: center; gap: 7px; height: 24px; padding: 0 10px; border-radius: 999px; }
+.menubar .mb-agent { background: rgba(255, 255, 255, .22); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), inset 0 0 0 .5px rgba(255, 255, 255, .35); }
+.mb-agent .glyph { width: 15px; height: 15px; }
+.cnt { display: inline-flex; align-items: center; gap: 3px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
+.mb-agent .dot { box-shadow: 0 0 0 .5px rgba(0, 0, 0, .3); }
+.dot.red { background: var(--red); }
+.dot.yellow { background: var(--yellow); }
+.dot.green { background: var(--green); }
+.dot.blue { background: var(--blue); }
+.dot.gray { background: var(--gray); }
+.dot.hollow { background: transparent; border: 1.5px solid var(--gray); }
+.pulse { animation: pulse 1.4s ease-in-out infinite; }
+@keyframes pulse { 50% { opacity: .3; } }
+
+.stage { display: flex; justify-content: space-between; align-items: flex-start; gap: 28px; padding: 12px 24px 48px; }
+.notes { flex: 1; max-width: 640px; display: grid; gap: 14px; }
+.note { border-radius: 20px; padding: 14px 18px; }
+.note.glass { background: linear-gradient(180deg, rgba(255, 255, 255, .72), rgba(255, 255, 255, .6)); }
+.note h2 { font-size: 16px; margin-bottom: 4px; }
+.note h3 { font-size: 12.5px; margin-bottom: 10px; }
+.note p, .note li { font-size: 12px; color: #3a3a3c; }
+.note ul { padding-left: 16px; display: grid; gap: 3px; }
+.note .hint { margin-top: 8px; color: var(--sub); font-size: 11.5px; }
+.icon-legend { display: grid; grid-template-columns: max-content 1fr; gap: 8px 14px; align-items: center; font-size: 12px; color: #3a3a3c; }
+.fake-bar { color: #fff; background: rgba(18, 38, 70, .62); font-size: 12.5px; justify-self: start; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .25); }
+.app-legend { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; }
+.app-legend > div { display: flex; align-items: center; gap: 8px; font-size: 11.5px; }
+.app-legend small { display: block; color: var(--faint); font-size: 10.5px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px; }
+.form { display: grid; grid-template-columns: 76px 1fr; gap: 7px 10px; align-items: center; font-size: 12px; }
+.form label { color: var(--sub); text-align: right; }
+.input { border-radius: 8px; padding: 4px 9px; background: rgba(255, 255, 255, .7); box-shadow: inset 0 0 0 .5px rgba(0, 0, 0, .12); overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.ok { color: #1a8f3a; font-weight: 600; font-size: 11px; align-self: center; }
+
+.panel { width: 420px; flex: none; margin-right: 150px; border-radius: 22px; overflow: hidden; }
+.p-head { padding: 13px 14px 8px 16px; display: flex; align-items: center; justify-content: space-between; }
+.p-head h1 { font-size: 15px; }
+.p-head .tools { display: flex; gap: 6px; }
+.round { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; color: #3a3a3c; font-size: 13px; }
+.summary { padding: 0 14px 10px; display: flex; gap: 6px; flex-wrap: wrap; }
+.chip { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border-radius: 999px; font-size: 11.5px; color: #3a3a3c; background: rgba(255, 255, 255, .45); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .7); }
+.balances { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; padding: 0 12px 10px; }
+.bal { border-radius: 14px; padding: 8px 10px; }
+.bal .name { font-size: 10.5px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bal .val { font-size: 16px; font-weight: 650; margin: 1px 0 5px; font-variant-numeric: tabular-nums; }
+.bal .val.low { color: #d70015; }
+.bal .foot { font-size: 10px; color: var(--sub); margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bar { height: 5px; border-radius: 3px; background: rgba(0, 0, 0, .1); overflow: hidden; flex: 1; }
+.bar > i { display: block; height: 100%; border-radius: 3px; background: var(--blue); }
+.seg { margin: 0 12px 6px; display: flex; border-radius: 999px; padding: 2px; background: rgba(0, 0, 0, .07); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .5); }
+.seg button { flex: 1; border: 0; background: transparent; font: inherit; font-size: 12px; padding: 4px 0; border-radius: 999px; color: #3a3a3c; cursor: pointer; }
+.seg button.on { background: rgba(255, 255, 255, .85); box-shadow: 0 1px 3px rgba(0, 0, 0, .14), inset 0 1px 0 #fff; font-weight: 600; }
+.note .seg { margin: 0; }
+
+.host { display: flex; align-items: center; gap: 6px; padding: 9px 14px 4px; font-size: 12px; font-weight: 700; color: #2c2c2e; cursor: pointer; user-select: none; }
+.host .right { margin-left: auto; font-weight: 500; font-size: 11px; color: var(--sub); display: flex; align-items: center; gap: 5px; }
+.host .right a { color: var(--blue); text-decoration: none; }
+.chev { width: 12px; height: 12px; color: var(--faint); transition: transform .15s; flex: none; }
+.collapsed > header .chev { transform: rotate(-90deg); }
+.collapsed > .body { display: none; }
+.dir { display: flex; align-items: center; gap: 6px; margin: 2px 8px 0 18px; padding: 4px 6px; border-radius: 10px; cursor: pointer; user-select: none; }
+.dir:hover { background: rgba(255, 255, 255, .3); }
+.dir .folder { width: 15px; height: 15px; color: #4ea8f5; flex: none; }
+.dir .chat-ic { width: 15px; height: 15px; color: #8e8e93; flex: none; }
+.dir .name { font-size: 12px; font-weight: 600; }
+.dir .path { font-size: 10.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.dir .mini { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--sub); flex: none; font-variant-numeric: tabular-nums; }
+.dir .mini .dot { width: 6px; height: 6px; margin-right: 2px; }
+.dir-group > .body { margin-left: 22px; }
+.host-group.offline > .body { opacity: .55; }
+
+.row { margin: 0 8px 0 0; border-radius: 12px; cursor: pointer; }
+.row:hover { background: rgba(255, 255, 255, .28); }
+.row.open { margin: 3px 8px 5px 0; }
+.row-main { display: flex; align-items: center; gap: 10px; padding: 6px 8px; }
+.app { position: relative; width: 32px; height: 32px; flex: none; display: grid; place-items: center; }
+.app img { width: 32px; height: 32px; display: block; filter: drop-shadow(0 1px 1.5px rgba(0, 0, 0, .16)); }
+.badge { position: absolute; right: -1px; bottom: -1px; width: 15px; height: 15px; border-radius: 5px; display: grid; place-items: center; border: 1.5px solid rgba(255, 255, 255, .95); }
+.badge.cli { background: #1d1d1f; color: #fff; font: 700 7px/1 ui-monospace, Menlo, monospace; letter-spacing: -.4px; }
+.badge.chat { background: var(--blue); color: #fff; border-radius: 50%; }
+.badge.chat svg { width: 8px; height: 8px; }
+.tile { width: 26px; height: 26px; border-radius: 7px; display: grid; place-items: center; color: #fff; font-weight: 800; font-size: 12px; background: linear-gradient(160deg, #a1a1a6, #636366); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .35); }
+.txt { flex: 1; min-width: 0; }
+.title { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.ov { font-size: 11px; color: var(--sub); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.meta { font-size: 10.5px; color: var(--faint); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pill {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; padding: 2px 9px; border-radius: 999px; flex: none; white-space: nowrap;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .6), inset 0 0 0 .5px rgba(255, 255, 255, .55);
+}
+.pill .dot { width: 6px; height: 6px; }
+.pill.gen, .pill.tool { color: #0058cc; background: rgba(10, 132, 255, .16); }
+.pill.approve { color: #a35600; background: rgba(255, 159, 10, .22); }
+.pill.done { color: #167a32; background: rgba(48, 209, 88, .2); }
+.pill.fail { color: #c70013; background: rgba(255, 69, 58, .17); }
+.pill.wait, .pill.proc { color: #4a4a4f; background: rgba(255, 255, 255, .42); }
+.pill.off { color: #6e6e73; background: transparent; box-shadow: none; border: 1px dashed rgba(60, 60, 67, .35); }
+.detail { display: none; padding: 2px 10px 10px 50px; cursor: default; }
+.row.open .detail { display: block; }
+.kv { display: grid; grid-template-columns: 76px 1fr; gap: 3px 8px; font-size: 11.5px; margin-bottom: 8px; }
+.kv span { color: var(--sub); }
+.kv b { font-weight: 500; overflow-wrap: anywhere; }
+.tok { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; margin-bottom: 8px; }
+.tok div { background: rgba(255, 255, 255, .5); border-radius: 9px; padding: 4px 7px; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .7); }
+.tok small { display: block; font-size: 10px; color: var(--sub); }
+.tok b { font-size: 12.5px; font-variant-numeric: tabular-nums; }
+.ctx { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--sub); margin-bottom: 8px; }
+.ctx b { color: var(--text); font-weight: 500; font-variant-numeric: tabular-nums; }
+.metrics { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
+.metrics .chip { font-size: 10.5px; padding: 1px 8px; }
+.tl { font-size: 11px; border-left: 2px solid rgba(0, 0, 0, .1); margin: 0 0 9px 3px; padding-left: 8px; display: grid; gap: 2px; }
+.tl div { display: flex; justify-content: space-between; gap: 8px; color: #3a3a3c; }
+.tl .t { color: var(--faint); font-variant-numeric: tabular-nums; flex: none; }
+.tl .warn { color: #a35600; }
+.tl .bad { color: #c70013; }
+.errbox { font-size: 11px; background: rgba(255, 69, 58, .12); color: #b3261e; border-radius: 9px; padding: 5px 9px; margin-bottom: 8px; }
+.btns { display: flex; gap: 6px; flex-wrap: wrap; }
+.btns button {
+  font: inherit; font-size: 11px; padding: 4px 11px; border-radius: 999px; border: 0; cursor: pointer; color: #1d1d1f;
+  background: rgba(255, 255, 255, .6); box-shadow: inset 0 1px 0 #fff, inset 0 0 0 .5px rgba(0, 0, 0, .1), 0 1px 2px rgba(0, 0, 0, .08);
+}
+.btns button.primary { background: linear-gradient(180deg, #3d9bff, #0a7cff); color: #fff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 1px 3px rgba(10, 100, 255, .35); }
+.p-foot { margin-top: 8px; padding: 10px 16px; border-top: .5px solid rgba(255, 255, 255, .6); display: flex; justify-content: space-between; font-size: 11px; color: var(--sub); }
+.p-foot a { color: var(--sub); text-decoration: none; margin-left: 10px; }
+.hidden { display: none !important; }
+.quick { display: flex; gap: 5px; margin-top: 5px; }
+.quick button, .nbtns button {
+  font: inherit; font-size: 11px; font-weight: 600; padding: 2px 11px; border-radius: 999px; border: 0; cursor: pointer; color: #1d1d1f;
+  background: rgba(255, 255, 255, .65); box-shadow: inset 0 1px 0 #fff, inset 0 0 0 .5px rgba(0, 0, 0, .1);
+}
+.quick button.primary, .nbtns button.primary { background: linear-gradient(180deg, #3d9bff, #0a7cff); color: #fff; box-shadow: inset 0 1px 0 rgba(255, 255, 255, .45), 0 1px 3px rgba(10, 100, 255, .35); }
+.quick button.deny { color: #c70013; }
+.jump {
+  width: 24px; height: 24px; border-radius: 50%; border: 0; flex: none; cursor: pointer; font-size: 12px; color: #1d1d1f;
+  background: rgba(255, 255, 255, .6); box-shadow: inset 0 1px 0 #fff, inset 0 0 0 .5px rgba(0, 0, 0, .1);
+}
+.risk { font-size: 11px; color: #a35600; background: rgba(255, 159, 10, .14); border-radius: 9px; padding: 4px 9px; margin-bottom: 8px; }
+.md-head { display: flex; justify-content: space-between; font-size: 10.5px; color: var(--sub); margin-bottom: 4px; }
+.md-head a { color: var(--blue); text-decoration: none; margin-left: 10px; }
+.md { font-size: 12px; line-height: 1.5; background: rgba(255, 255, 255, .55); border-radius: 12px; padding: 9px 12px; margin-bottom: 9px; max-height: 260px; overflow: auto; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .7); }
+.md h4 { font-size: 13px; margin-bottom: 4px; }
+.md p { margin-bottom: 5px; }
+.md ul { padding-left: 18px; margin-bottom: 6px; }
+.md pre { background: #1d1d1f; color: #f5f5f7; border-radius: 8px; padding: 7px 9px; margin-bottom: 6px; overflow-x: auto; }
+.md pre code { background: transparent; color: inherit; padding: 0; font-size: 10.5px; line-height: 1.45; }
+.md table { border-collapse: collapse; font-size: 11px; width: 100%; }
+.md th, .md td { text-align: left; padding: 3px 6px; border-bottom: .5px solid rgba(0, 0, 0, .1); }
+.md th { color: var(--sub); font-weight: 600; }
+.notif { display: flex; align-items: center; gap: 10px; border-radius: 16px; padding: 9px 12px; margin-bottom: 10px; }
+.nbtns { display: flex; gap: 5px; flex: none; }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="glyph" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="1.5" y="2.5" width="13" height="11" rx="2.5"/><path d="M4.5 6.5l2 1.5-2 1.5M8.5 10h3"/>
+  </symbol>
+  <symbol id="i-laptop" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="3" y="3" width="10" height="7.5" rx="1.2"/><path d="M1.5 12.5h13"/>
+  </symbol>
+  <symbol id="i-server" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <rect x="2.5" y="2.5" width="11" height="4.5" rx="1.2"/><rect x="2.5" y="9" width="11" height="4.5" rx="1.2"/><path d="M5 4.75h.01M5 11.25h.01"/>
+  </symbol>
+  <symbol id="i-folder" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M1.5 4.2c0-.9.7-1.6 1.6-1.6h3l1.4 1.5h5.4c.9 0 1.6.7 1.6 1.6v6.1c0 .9-.7 1.6-1.6 1.6H3.1c-.9 0-1.6-.7-1.6-1.6z"/>
+  </symbol>
+  <symbol id="i-chevron" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M4.5 6.5 8 10l3.5-3.5"/>
+  </symbol>
+  <symbol id="i-chat" viewBox="0 0 16 16" fill="currentColor">
+    <path d="M8 2.5c3.3 0 6 2.2 6 5s-2.7 5-6 5c-.7 0-1.4-.1-2-.3L3 13.5l.8-2.6C2.7 10 2 8.8 2 7.5c0-2.8 2.7-5 6-5z"/>
+  </symbol>
+</svg>
+
+<div class="menubar">
+  <div class="group"><span class="bold"></span><span class="bold">Finder</span><span>文件</span><span>编辑</span><span>显示</span><span>前往</span><span>窗口</span></div>
+  <div class="group">
+    <span class="mb-agent"><svg class="glyph"><use href="#glyph"/></svg><span class="cnt"><i class="dot red"></i>1</span><span class="cnt"><i class="dot yellow"></i>1</span><span class="cnt"><i class="dot green"></i>1</span><span class="cnt"><i class="dot blue"></i>3</span></span>
+    <span>Wi‑Fi</span><span>100%</span><span>11月19日 周四 14:32</span>
+  </div>
+</div>
+
+<div class="stage">
+  <div class="notes">
+    <div class="note glass">
+      <h2>AgentBar 原型 v0.2 · 液态玻璃</h2>
+      <p>右侧是点击菜单栏图标后弹出的面板：一级按 本机 / 服务器 分组，二级按工作目录分组。点击组头可以折叠，点击会话行展开详情，顶部可切换筛选。待审批的会话可以直接一键批准 / 拒绝；已完成的会话可以一键跳转（↗），或展开查看 Markdown 渲染的最终输出。数据均为示例。</p>
+    </div>
+
+    <div class="note glass">
+      <h3>菜单栏图标 · 样式 B（默认）</h3>
+      <div class="icon-legend">
+        <span class="mb-agent fake-bar"><svg class="glyph"><use href="#glyph"/></svg><span class="cnt"><i class="dot red"></i>1</span><span class="cnt"><i class="dot yellow"></i>1</span><span class="cnt"><i class="dot green"></i>1</span><span class="cnt"><i class="dot blue"></i>3</span></span><span>失败 / 待审批 / 已完成未查看 / 生成中，各自计数</span>
+        <span class="mb-agent fake-bar"><svg class="glyph"><use href="#glyph"/></svg><span class="cnt"><i class="dot yellow"></i>2</span><span class="cnt"><i class="dot blue"></i>1</span></span><span>只显示非零的状态，顺序固定：红 → 黄 → 绿 → 蓝</span>
+        <span class="mb-agent fake-bar"><svg class="glyph"><use href="#glyph"/></svg><span class="cnt"><i class="dot blue pulse"></i>3</span></span><span>只有生成中（呼吸动画可在设置里关闭）</span>
+        <span class="mb-agent fake-bar"><svg class="glyph"><use href="#glyph"/></svg></span><span>没有需要关注的会话，只显示单色字形</span>
+      </div>
+      <p class="hint">超过 9 显示 9+；“等待输入”和对话应用不计入。设置里可切回样式 A（总数 + 单个状态点）。</p>
+    </div>
+
+    <div class="note glass">
+      <h3>一键审批（面板内 / 系统通知）</h3>
+      <div class="notif glass-inner">
+        <div class="app"><img src="assets/claude.png" alt=""><span class="badge cli">&gt;_</span></div>
+        <div class="txt"><div class="title">Claude Code 需要审批 · AcmeCore</div><div class="ov">Bash：rm -rf .build &amp;&amp; swift build</div></div>
+        <div class="nbtns"><button class="primary">批准</button><button>拒绝</button></div>
+      </div>
+      <ul>
+        <li>Claude Code CLI（本机 + SSH）：通过 hook 回传决定，真正的一键批准 / 拒绝</li>
+        <li>Codex 和其他工具：暂时没有回传通道，按钮换成“跳转到终端”</li>
+        <li>只有“批准一次 / 拒绝”；高风险命令（rm -rf、sudo、git push --force、curl | sh…）需要二次确认，所有决定写入本地审计日志</li>
+        <li>点“在终端处理”，或超过 120 秒没有决定，就交回终端里的原生审批</li>
+      </ul>
+    </div>
+
+    <div class="note glass">
+      <h3>应用图标（运行时从已安装的应用读取）</h3>
+      <div class="app-legend">
+        <div><div class="app"><img src="assets/claude.png" alt=""></div><span>Claude 桌面版</span></div>
+        <div><div class="app"><img src="assets/claude.png" alt=""><span class="badge cli">&gt;_</span></div><span>Claude Code CLI</span></div>
+        <div><div class="app"><img src="assets/cursor.png" alt=""></div><span>Cursor</span></div>
+        <div><div class="app"><img src="assets/codex.png" alt=""></div><span>Codex 桌面版</span></div>
+        <div><div class="app"><img src="assets/codex.png" alt=""><span class="badge cli">&gt;_</span></div><span>Codex CLI</span></div>
+        <div><div class="app"><span class="tile">T</span></div><span>Trae<small>未安装 · 占位图标</small></span></div>
+        <div><div class="app"><img src="assets/deepseek.png" alt=""></div><span>DeepSeek Harness</span></div>
+        <div><div class="app"><img src="assets/deepseek.png" alt=""><span class="badge chat"><svg><use href="#i-chat"/></svg></span></div><span>DeepSeek 对话</span></div>
+        <div><div class="app"><img src="assets/doubao.png" alt=""><span class="badge chat"><svg><use href="#i-chat"/></svg></span></div><span>豆包</span></div>
+      </div>
+      <p class="hint">角标 <b>&gt;_</b> = 命令行版；蓝色气泡 = 对话应用（只做进程级检测）；桌面 agent 应用不加角标。安装包不打包品牌 logo。</p>
+    </div>
+
+    <div class="note glass">
+      <h3>分组规则</h3>
+      <ul>
+        <li>一级：本机 / 每台 SSH 服务器，组头显示连接状态；离线主机默认折叠</li>
+        <li>二级：工作目录，默认合并到 git 仓库根目录；同一目录下不同工具的会话放在一起</li>
+        <li>没有工作目录的豆包、DeepSeek 对话、Claude 聊天归到“对话应用”</li>
+        <li>组内排序：需关注 → 进行中 → 已完成 → 等待输入；折叠状态会记住</li>
+      </ul>
+    </div>
+
+    <div class="note glass">
+      <h3>状态胶囊</h3>
+      <div class="legend">
+        <span class="pill gen"><i class="dot blue pulse"></i>生成中</span>
+        <span class="pill tool"><i class="dot blue pulse"></i>运行工具</span>
+        <span class="pill approve"><i class="dot yellow"></i>待审批</span>
+        <span class="pill done"><i class="dot green"></i>已完成</span>
+        <span class="pill fail"><i class="dot red"></i>失败</span>
+        <span class="pill wait"><i class="dot gray"></i>等待输入</span>
+        <span class="pill proc"><i class="dot hollow"></i>运行中（进程级）</span>
+        <span class="pill off"><i class="dot hollow"></i>离线</span>
+      </div>
+    </div>
+
+    <div class="note glass">
+      <h3>设置 · 余额源（节选）</h3>
+      <div class="form">
+        <label>名称</label><div class="input">内部 SSO Dashboard</div>
+        <label>类型</label><div class="seg"><button>JSON API</button><button class="on">网页提取</button><button>自定义命令</button></div>
+        <label>地址</label><div class="input">https://&lt;内部 dashboard 地址&gt;/usage</div>
+        <label>登录</label><div class="btns"><button>在 AgentBar 中登录（SSO）</button><span class="ok" style="color:var(--sub);font-weight:500">已登录 · 今天 09:12</span></div>
+        <label>提取规则</label><div class="input"><code>document.querySelector('.balance-amount').innerText</code></div>
+        <label></label><div class="btns"><button>测试提取</button><span class="ok">✓ 提取到 $1,284.50</span></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel glass">
+    <div class="p-head">
+      <h1>AgentBar</h1>
+      <div class="tools"><span class="round glass-inner" title="搜索">⌕</span><span class="round glass-inner" title="刷新">↻</span><span class="round glass-inner" title="设置">⚙︎</span></div>
+    </div>
+    <div class="summary">
+      <span class="chip">11 个会话</span>
+      <span class="chip"><i class="dot red"></i>1 失败</span>
+      <span class="chip"><i class="dot yellow"></i>1 待审批</span>
+      <span class="chip"><i class="dot green"></i>1 已完成</span>
+      <span class="chip"><i class="dot blue"></i>3 进行中</span>
+    </div>
+    <div class="balances">
+      <div class="bal glass-inner">
+        <div class="name">内部 SSO Dashboard</div>
+        <div class="val">$1,284.50</div>
+        <div class="bar"><i style="width:62%"></i></div>
+        <div class="foot">本月已用 62% · 2 分钟前</div>
+      </div>
+      <div class="bal glass-inner">
+        <div class="name">DeepSeek API</div>
+        <div class="val low">¥86.20</div>
+        <div class="bar"><i style="width:86%;background:var(--red)"></i></div>
+        <div class="foot">低于阈值 ¥100</div>
+      </div>
+      <div class="bal glass-inner">
+        <div class="name">火山方舟（豆包）</div>
+        <div class="val">¥312.40</div>
+        <div class="bar"><i style="width:35%"></i></div>
+        <div class="foot">自定义命令 · 15 分钟前</div>
+      </div>
+    </div>
+    <div class="seg" id="filter">
+      <button class="on" data-filter="all">全部</button>
+      <button data-filter="active">进行中</button>
+      <button data-filter="attention">需关注</button>
+    </div>
+
+    <section class="host-group">
+      <header class="host"><svg class="chev"><use href="#i-chevron"/></svg><svg class="i"><use href="#i-laptop"/></svg>本机 · MacBook Pro<span class="right">8 个会话</span></header>
+      <div class="body">
+
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">AcmeCore</span><span class="path">~/Documents/code/AcmeCore</span><span class="mini"><span><i class="dot yellow"></i>1</span><span><i class="dot green"></i>1</span></span></header>
+          <div class="body">
+            <div class="row open glass-inner" data-status="approve">
+              <div class="row-main">
+                <div class="app"><img src="assets/claude.png" alt=""><span class="badge cli">&gt;_</span></div>
+                <div class="txt">
+                  <div class="title">修复数据流分页加载边界</div>
+                  <div class="ov">请求执行 Bash：rm -rf .build &amp;&amp; swift build</div>
+                  <div class="meta">Claude Code CLI · claude-opus-5-5 · 38 分钟</div>
+                  <div class="quick"><button class="primary">批准</button><button class="deny">拒绝</button><button>在终端处理</button></div>
+                </div>
+                <span class="pill approve"><i class="dot yellow"></i>待审批</span>
+              </div>
+              <div class="detail">
+                <div class="kv">
+                  <span>当前工具</span><b><code>Bash</code> rm -rf .build &amp;&amp; swift build</b>
+                  <span>已等待</span><b>2 分 13 秒</b>
+                  <span>工作目录</span><b>~/Documents/code/AcmeCore/Sources</b>
+                  <span>供应商/模型</span><b>Anthropic · claude-opus-5-5</b>
+                </div>
+                <div class="risk">⚠︎ 命中高风险规则 <code>rm -rf</code>：点“批准”后需要再确认一次</div>
+                <div class="tok">
+                  <div><small>输入</small><b>182.4k</b></div>
+                  <div><small>输出</small><b>12.9k</b></div>
+                  <div><small>缓存读</small><b>1.42M</b></div>
+                  <div><small>缓存写</small><b>96.1k</b></div>
+                </div>
+                <div class="ctx"><span>上下文</span><div class="bar"><i style="width:64%"></i></div><b>128k / 200k · 64%</b></div>
+                <div class="metrics">
+                  <span class="chip">缓存命中 84%</span>
+                  <span class="chip">内存 412 MB</span>
+                  <span class="chip">CPU 3%</span>
+                  <span class="chip">工具成功 44/46</span>
+                  <span class="chip">52 tok/s</span>
+                  <span class="chip">第 9 轮</span>
+                  <span class="chip">预估 $4.12</span>
+                </div>
+                <div class="tl">
+                  <div class="warn"><span><code>Bash</code> rm -rf .build &amp;&amp; swift build</span><span class="t">待审批 2:13</span></div>
+                  <div><span><code>Edit</code> Sources/AcmeCore/Loader.swift</span><span class="t">0.4s</span></div>
+                  <div><span><code>Read</code> Sources/AcmeCore/Loader.swift</span><span class="t">0.1s</span></div>
+                  <div class="bad"><span><code>Bash</code> swift test --filter LoaderTests</span><span class="t">失败 · 18.2s</span></div>
+                </div>
+                <div class="btns">
+                  <button class="primary">批准一次</button>
+                  <button>拒绝并说明原因…</button>
+                  <button>跳转到终端</button>
+                  <button>复制恢复命令</button>
+                </div>
+              </div>
+            </div>
+            <div class="row open glass-inner" data-status="done">
+              <div class="row-main">
+                <div class="app"><img src="assets/codex.png" alt=""><span class="badge cli">&gt;_</span></div>
+                <div class="txt">
+                  <div class="title">给 Loader 补单元测试</div>
+                  <div class="ov">新增 6 个测试用例，全部通过</div>
+                  <div class="meta">Codex CLI · gpt-5-codex · 4 分钟前</div>
+                </div>
+                <button class="jump" title="跳转到终端">↗</button>
+                <span class="pill done"><i class="dot green"></i>已完成</span>
+              </div>
+              <div class="detail">
+                <div class="md-head"><span>最终输出 · 14:28</span><span><a href="#">复制 Markdown</a><a href="#">在窗口中打开</a></span></div>
+                <div class="md">
+                  <h4>已为 Loader 补充单元测试</h4>
+                  <p>新增 <code>LoaderTests.swift</code>，覆盖空批次、截断行和编码错误三类边界：</p>
+                  <ul>
+                    <li><b>6</b> 个新用例，全部通过</li>
+                    <li>顺带修复 <code>decodeBatch</code> 在空输入时崩溃的问题</li>
+                  </ul>
+                  <pre><code>$ swift test --filter LoaderTests
+Test Suite 'LoaderTests' passed
+     Executed 6 tests, with 0 failures</code></pre>
+                  <table>
+                    <tr><th>文件</th><th>改动</th></tr>
+                    <tr><td>Tests/LoaderTests.swift</td><td>+142</td></tr>
+                    <tr><td>Sources/AcmeCore/Loader.swift</td><td>+8 −3</td></tr>
+                  </table>
+                </div>
+                <div class="btns"><button class="primary">跳转到终端（Terminal · ttys004）</button><button>打开目录</button><button>复制恢复命令</button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">AgentBar</span><span class="path">~/Documents/code/AgentBar</span><span class="mini"><span><i class="dot blue"></i>1</span></span></header>
+          <div class="body">
+            <div class="row" data-status="tool">
+              <div class="row-main">
+                <div class="app"><img src="assets/codex.png" alt=""></div>
+                <div class="txt">
+                  <div class="title">AgentBar 菜单栏工具设计</div>
+                  <div class="ov">apply_patch：prototype/index.html（+380 行）</div>
+                  <div class="meta">Codex 桌面版 · gpt-5-codex · 21 分钟</div>
+                </div>
+                <span class="pill tool"><i class="dot blue pulse"></i>运行工具</span>
+              </div>
+              <div class="detail">
+                <div class="kv">
+                  <span>当前工具</span><b><code>apply_patch</code> prototype/index.html · 已运行 4 秒</b>
+                  <span>供应商/模型</span><b>OpenAI · gpt-5-codex（推理 high）</b>
+                </div>
+                <div class="tok">
+                  <div><small>输入</small><b>476k</b></div>
+                  <div><small>输出</small><b>9.8k</b></div>
+                  <div><small>缓存输入</small><b>412k</b></div>
+                  <div><small>推理</small><b>6.1k</b></div>
+                </div>
+                <div class="ctx"><span>上下文</span><div class="bar"><i style="width:31%"></i></div><b>84k / 272k · 31%</b></div>
+                <div class="btns"><button class="primary">打开 Codex</button><button>打开目录</button><button>复制会话 ID</button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">aurora-ui</span><span class="path">~/Documents/code/aurora-ui</span><span class="mini"><span><i class="dot blue"></i>1</span></span></header>
+          <div class="body">
+            <div class="row" data-status="gen">
+              <div class="row-main">
+                <div class="app"><img src="assets/deepseek.png" alt=""></div>
+                <div class="txt">
+                  <div class="title">aurora-ui 组件库多语言适配</div>
+                  <div class="ov">正在补全 locale/zh.json 中缺失的 38 个键…</div>
+                  <div class="meta">DeepSeek Harness · deepseek-chat · 6 分钟</div>
+                </div>
+                <span class="pill gen"><i class="dot blue pulse"></i>生成中</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">data-pipeline</span><span class="path">~/Documents/code/data-pipeline</span><span class="mini"><span><i class="dot gray"></i>1</span></span></header>
+          <div class="body">
+            <div class="row" data-status="wait">
+              <div class="row-main">
+                <div class="app"><img src="assets/cursor.png" alt=""></div>
+                <div class="txt">
+                  <div class="title">重构训练流水线配置加载</div>
+                  <div class="ov">已修改 4 个文件，等待你确认下一步</div>
+                  <div class="meta">Cursor · claude-opus-5-5 · 9 分钟前</div>
+                </div>
+                <span class="pill wait"><i class="dot gray"></i>等待输入</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">Codex</span><span class="path">~/Documents/Codex</span><span class="mini"><span><i class="dot gray"></i>1</span></span></header>
+          <div class="body">
+            <div class="row" data-status="wait">
+              <div class="row-main">
+                <div class="app"><span class="tile">T</span></div>
+                <div class="txt">
+                  <div class="title">README 中英对照</div>
+                  <div class="ov">等待你的下一条消息</div>
+                  <div class="meta">Trae · doubao-seed-code · 25 分钟前</div>
+                </div>
+                <span class="pill wait"><i class="dot gray"></i>等待输入</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="chat-ic"><use href="#i-chat"/></svg><span class="name">对话应用</span><span class="path">无工作目录</span><span class="mini"><span><i class="dot hollow"></i>2</span></span></header>
+          <div class="body">
+            <div class="row" data-status="proc">
+              <div class="row-main">
+                <div class="app"><img src="assets/doubao.png" alt=""><span class="badge chat"><svg><use href="#i-chat"/></svg></span></div>
+                <div class="txt">
+                  <div class="title">周报润色</div>
+                  <div class="ov">窗口标题 · 前台</div>
+                  <div class="meta">豆包 · 仅进程级</div>
+                </div>
+                <span class="pill proc"><i class="dot hollow"></i>运行中</span>
+              </div>
+            </div>
+            <div class="row" data-status="proc">
+              <div class="row-main">
+                <div class="app"><img src="assets/deepseek.png" alt=""><span class="badge chat"><svg><use href="#i-chat"/></svg></span></div>
+                <div class="txt">
+                  <div class="title">Rust 生命周期问题</div>
+                  <div class="ov">窗口标题 · 后台</div>
+                  <div class="meta">DeepSeek 对话 · 仅进程级</div>
+                </div>
+                <span class="pill proc"><i class="dot hollow"></i>运行中</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+      </div>
+    </section>
+
+    <section class="host-group">
+      <header class="host"><svg class="chev"><use href="#i-chevron"/></svg><svg class="i"><use href="#i-server"/></svg>gpu-dev-01<span class="right"><i class="dot green"></i>SSH · 38 ms</span></header>
+      <div class="body">
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">vision-trainer</span><span class="path">/data/vision-trainer</span><span class="mini"><span><i class="dot blue"></i>1</span></span></header>
+          <div class="body">
+            <div class="row" data-status="gen">
+              <div class="row-main">
+                <div class="app"><img src="assets/claude.png" alt=""><span class="badge cli">&gt;_</span></div>
+                <div class="txt">
+                  <div class="title">分布式训练学习率扫描</div>
+                  <div class="ov">正在分析第 3 组实验的 loss 曲线…</div>
+                  <div class="meta">Claude Code CLI · claude-opus-5-5 · 1 小时 4 分</div>
+                </div>
+                <span class="pill gen"><i class="dot blue pulse"></i>生成中</span>
+              </div>
+            </div>
+          </div>
+        </section>
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">ckpt-tools</span><span class="path">/data/ckpt-tools</span><span class="mini"><span><i class="dot red"></i>1</span></span></header>
+          <div class="body">
+            <div class="row" data-status="fail">
+              <div class="row-main">
+                <div class="app"><img src="assets/codex.png" alt=""><span class="badge cli">&gt;_</span></div>
+                <div class="txt">
+                  <div class="title">清理旧 checkpoint 脚本</div>
+                  <div class="ov">API 429：触发速率限制，重试 3 次后放弃</div>
+                  <div class="meta">Codex CLI · gpt-5-codex · 11 分钟前</div>
+                </div>
+                <span class="pill fail"><i class="dot red"></i>失败</span>
+              </div>
+              <div class="detail">
+                <div class="errbox">429 Too Many Requests：rate limit reached，已自动重试 3 次后放弃（14:21）</div>
+                <div class="btns"><button class="primary">在终端 SSH 打开</button><button>复制恢复命令</button></div>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <section class="host-group offline collapsed">
+      <header class="host"><svg class="chev"><use href="#i-chevron"/></svg><svg class="i"><use href="#i-server"/></svg>build-mac<span class="right"><i class="dot hollow"></i>离线 · 认证失败 · 1 个会话 · <a href="#">重连</a></span></header>
+      <div class="body">
+        <section class="dir-group">
+          <header class="dir"><svg class="chev"><use href="#i-chevron"/></svg><svg class="folder"><use href="#i-folder"/></svg><span class="name">ios-build</span><span class="path">~/work/ios-build</span></header>
+          <div class="body">
+            <div class="row" data-status="off">
+              <div class="row-main">
+                <div class="app"><img src="assets/codex.png" alt=""><span class="badge cli">&gt;_</span></div>
+                <div class="txt">
+                  <div class="title">iOS 构建脚本</div>
+                  <div class="ov">最后已知状态：等待输入（3 分钟前）</div>
+                  <div class="meta">Codex CLI</div>
+                </div>
+                <span class="pill off"><i class="dot hollow"></i>离线</span>
+              </div>
+            </div>
+          </div>
+        </section>
+      </div>
+    </section>
+
+    <div class="p-foot">
+      <span>今日 3.1M tokens · 缓存命中 84% · 预估 $18.40</span>
+      <span><a href="#">设置</a><a href="#">退出</a></span>
+    </div>
+  </div>
+</div>
+
+<script>
+const groups = { all: null, active: ["gen", "tool", "approve"], attention: ["approve", "fail"] };
+
+document.querySelectorAll(".row-main").forEach(main => {
+  main.addEventListener("click", event => {
+    const row = main.parentElement;
+    if (event.target.closest("button") || !row.querySelector(".detail")) return;
+    row.classList.toggle("open");
+    row.classList.toggle("glass-inner");
+  });
+});
+
+document.querySelectorAll(".host, .dir").forEach(header => {
+  header.addEventListener("click", event => {
+    if (event.target.closest("a")) return;
+    header.parentElement.classList.toggle("collapsed");
+  });
+});
+
+document.querySelectorAll("#filter button").forEach(button => {
+  button.addEventListener("click", () => {
+    document.querySelectorAll("#filter button").forEach(other => other.classList.toggle("on", other === button));
+    const allowed = groups[button.dataset.filter];
+    document.querySelectorAll(".row").forEach(row => {
+      row.classList.toggle("hidden", allowed !== null && !allowed.includes(row.dataset.status));
+    });
+    document.querySelectorAll(".dir-group, .host-group").forEach(group => {
+      group.classList.toggle("hidden", !group.querySelector(".row:not(.hidden)"));
+    });
+  });
+});
+</script>
+</body>
+</html>

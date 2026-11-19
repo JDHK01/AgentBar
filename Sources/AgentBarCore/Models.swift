@@ -1,0 +1,525 @@
+import Foundation
+
+public enum AgentKind: String, Codable, CaseIterable, Sendable {
+    case claudeCode
+    case claudeDesktop
+    case codexCLI
+    case codexDesktop
+    case deepseekHarness
+    case deepseekChat
+    case doubao
+    case cursor
+    case trae
+    case generic
+
+    public var displayName: String {
+        switch self {
+        case .claudeCode: return "Claude Code CLI"
+        case .claudeDesktop: return "Claude 桌面版"
+        case .codexCLI: return "Codex CLI"
+        case .codexDesktop: return "Codex 桌面版"
+        case .deepseekHarness: return "DeepSeek Harness"
+        case .deepseekChat: return "DeepSeek 对话"
+        case .doubao: return "豆包"
+        case .cursor: return "Cursor"
+        case .trae: return "Trae"
+        case .generic: return "Agent"
+        }
+    }
+
+    public var isCLI: Bool {
+        switch self {
+        case .claudeCode, .codexCLI:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var isChatOnly: Bool {
+        switch self {
+        case .doubao, .deepseekChat:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var preferredBundleIdentifiers: [String] {
+        switch self {
+        case .claudeCode, .claudeDesktop:
+            return ["com.anthropic.claudefordesktop"]
+        case .codexCLI, .codexDesktop:
+            return ["com.openai.codex", "com.openai.chat"]
+        case .deepseekHarness, .deepseekChat:
+            return ["com.deepseek.dsh", "com.deepseek.chat"]
+        case .doubao:
+            return ["com.bot.neotix.doubao", "com.bytedance.doubao"]
+        case .cursor:
+            return ["com.todesktop.230313mzl4w4u92", "com.cursor.Cursor"]
+        case .trae:
+            return ["com.bytedance.trae", "cn.trae.app", "com.marscode.ide"]
+        case .generic:
+            return ["com.apple.Terminal"]
+        }
+    }
+
+    public var fallbackAppPaths: [String] {
+        switch self {
+        case .claudeCode, .claudeDesktop:
+            return ["/Applications/Claude.app"]
+        case .codexCLI, .codexDesktop:
+            return ["/Applications/ChatGPT.app", "/Applications/Codex.app"]
+        case .deepseekHarness, .deepseekChat:
+            return ["/Applications/DeepSeek Harness.app", "/Applications/DeepSeek.app"]
+        case .doubao:
+            return ["/Applications/Doubao.app", "/Applications/豆包.app"]
+        case .cursor:
+            return ["/Applications/Cursor.app"]
+        case .trae:
+            return ["/Applications/Trae.app", "/Applications/Trae CN.app"]
+        case .generic:
+            return ["/System/Applications/Utilities/Terminal.app"]
+        }
+    }
+
+    public var fallbackMonogram: String {
+        switch self {
+        case .claudeCode, .claudeDesktop: return "C"
+        case .codexCLI, .codexDesktop: return "Cx"
+        case .deepseekHarness, .deepseekChat: return "DS"
+        case .doubao: return "豆"
+        case .cursor: return "Cu"
+        case .trae: return "T"
+        case .generic: return ">_"
+        }
+    }
+}
+
+public enum HostID: Hashable, Codable, Sendable {
+    case local
+    case ssh(alias: String)
+
+    public var storageKey: String {
+        switch self {
+        case .local: return "local"
+        case .ssh(let alias): return "ssh:\(alias)"
+        }
+    }
+
+    public var displayTitle: String {
+        switch self {
+        case .local:
+            let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+            return "本机 · \(host)"
+        case .ssh(let alias):
+            return alias
+        }
+    }
+
+    public var isLocal: Bool {
+        if case .local = self { return true }
+        return false
+    }
+}
+
+public struct HostConnectionState: Codable, Hashable, Sendable {
+    public var host: HostID
+    public var isOnline: Bool
+    public var latencyMs: Int?
+    public var errorMessage: String?
+    public var updatedAt: Date
+
+    public init(
+        host: HostID,
+        isOnline: Bool = true,
+        latencyMs: Int? = nil,
+        errorMessage: String? = nil,
+        updatedAt: Date = Date()
+    ) {
+        self.host = host
+        self.isOnline = isOnline
+        self.latencyMs = latencyMs
+        self.errorMessage = errorMessage
+        self.updatedAt = updatedAt
+    }
+}
+
+public enum SessionStatus: Int, Codable, CaseIterable, Sendable, Comparable {
+    case failed = 0
+    case awaitingApproval = 1
+    case completed = 2
+    case runningTool = 3
+    case generating = 4
+    case waitingForInput = 5
+    case runningProcessOnly = 6
+    case idle = 7
+    case offline = 8
+
+    public static func < (lhs: SessionStatus, rhs: SessionStatus) -> Bool {
+        lhs.rawValue < rhs.rawValue
+    }
+
+    public var label: String {
+        switch self {
+        case .failed: return "失败"
+        case .awaitingApproval: return "待审批"
+        case .completed: return "已完成"
+        case .runningTool: return "运行工具"
+        case .generating: return "生成中"
+        case .waitingForInput: return "等待输入"
+        case .runningProcessOnly: return "运行中"
+        case .idle: return "空闲"
+        case .offline: return "离线"
+        }
+    }
+
+    public var isActiveWork: Bool {
+        switch self {
+        case .generating, .runningTool, .awaitingApproval:
+            return true
+        default:
+            return false
+        }
+    }
+
+    public var needsAttention: Bool {
+        switch self {
+        case .failed, .awaitingApproval:
+            return true
+        default:
+            return false
+        }
+    }
+}
+
+public struct TokenUsage: Codable, Hashable, Sendable {
+    public var input: Int
+    public var output: Int
+    public var cacheRead: Int
+    public var cacheWrite: Int
+    public var reasoning: Int
+
+    public init(
+        input: Int = 0,
+        output: Int = 0,
+        cacheRead: Int = 0,
+        cacheWrite: Int = 0,
+        reasoning: Int = 0
+    ) {
+        self.input = input
+        self.output = output
+        self.cacheRead = cacheRead
+        self.cacheWrite = cacheWrite
+        self.reasoning = reasoning
+    }
+
+    public var totalPromptTokens: Int {
+        input + cacheRead + cacheWrite
+    }
+
+    public var totalTokens: Int {
+        input + output + cacheRead + cacheWrite
+    }
+
+    public var cacheHitRate: Double? {
+        let denom = input + cacheRead + cacheWrite
+        guard denom > 0 else { return nil }
+        return Double(cacheRead) / Double(denom)
+    }
+}
+
+public struct ToolCallRecord: Identifiable, Codable, Hashable, Sendable {
+    public let id: String
+    public var name: String
+    public var summary: String
+    public var startedAt: Date
+    public var finishedAt: Date?
+    public var isError: Bool
+
+    public init(
+        id: String,
+        name: String,
+        summary: String,
+        startedAt: Date,
+        finishedAt: Date? = nil,
+        isError: Bool = false
+    ) {
+        self.id = id
+        self.name = name
+        self.summary = summary
+        self.startedAt = startedAt
+        self.finishedAt = finishedAt
+        self.isError = isError
+    }
+
+    public var durationSeconds: TimeInterval? {
+        guard let finishedAt else { return nil }
+        return max(0, finishedAt.timeIntervalSince(startedAt))
+    }
+}
+
+public struct ProcessStats: Codable, Hashable, Sendable {
+    public var pid: Int32
+    public var memoryBytes: UInt64
+    public var cpuPercent: Double
+    public var tty: String?
+    public var cwd: String?
+    public var command: String
+
+    public init(
+        pid: Int32,
+        memoryBytes: UInt64,
+        cpuPercent: Double,
+        tty: String? = nil,
+        cwd: String? = nil,
+        command: String = ""
+    ) {
+        self.pid = pid
+        self.memoryBytes = memoryBytes
+        self.cpuPercent = cpuPercent
+        self.tty = tty
+        self.cwd = cwd
+        self.command = command
+    }
+}
+
+public struct PendingApproval: Codable, Hashable, Sendable {
+    public var requestID: String
+    public var sessionID: String?
+    public var host: HostID
+    public var toolName: String
+    public var commandOrSummary: String
+    public var cwd: String?
+    public var requestedAt: Date
+    public var canRespondViaHook: Bool
+    public var highRiskMatchedRule: String?
+
+    public init(
+        requestID: String,
+        sessionID: String? = nil,
+        host: HostID = .local,
+        toolName: String,
+        commandOrSummary: String,
+        cwd: String? = nil,
+        requestedAt: Date = Date(),
+        canRespondViaHook: Bool = true,
+        highRiskMatchedRule: String? = nil
+    ) {
+        self.requestID = requestID
+        self.sessionID = sessionID
+        self.host = host
+        self.toolName = toolName
+        self.commandOrSummary = commandOrSummary
+        self.cwd = cwd
+        self.requestedAt = requestedAt
+        self.canRespondViaHook = canRespondViaHook
+        self.highRiskMatchedRule = highRiskMatchedRule
+    }
+}
+
+public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
+    public var id: String
+    public var rawSessionID: String
+    public var kind: AgentKind
+    public var host: HostID
+    public var title: String
+    public var overview: String
+    public var status: SessionStatus
+    public var statusIsInferred: Bool
+    public var cwd: String?
+    public var groupDirectory: String?
+    public var provider: String?
+    public var model: String?
+    public var reasoningEffort: String?
+    public var usage: TokenUsage
+    public var contextUsedTokens: Int?
+    public var contextWindow: Int?
+    public var currentTool: ToolCallRecord?
+    public var recentTools: [ToolCallRecord]
+    public var totalToolCalls: Int
+    public var successfulToolCalls: Int
+    public var turnCount: Int
+    public var compactCount: Int
+    public var outputTokensPerSecond: Double?
+    public var process: ProcessStats?
+    public var pendingApproval: PendingApproval?
+    public var lastOutputMarkdown: String?
+    public var errorBanner: String?
+    public var sourceFilePath: String?
+    public var startedAt: Date
+    public var lastActivityAt: Date
+    public var isSeen: Bool
+
+    public init(
+        id: String,
+        rawSessionID: String,
+        kind: AgentKind,
+        host: HostID = .local,
+        title: String,
+        overview: String,
+        status: SessionStatus,
+        statusIsInferred: Bool = false,
+        cwd: String? = nil,
+        groupDirectory: String? = nil,
+        provider: String? = nil,
+        model: String? = nil,
+        reasoningEffort: String? = nil,
+        usage: TokenUsage = TokenUsage(),
+        contextUsedTokens: Int? = nil,
+        contextWindow: Int? = nil,
+        currentTool: ToolCallRecord? = nil,
+        recentTools: [ToolCallRecord] = [],
+        totalToolCalls: Int = 0,
+        successfulToolCalls: Int = 0,
+        turnCount: Int = 0,
+        compactCount: Int = 0,
+        outputTokensPerSecond: Double? = nil,
+        process: ProcessStats? = nil,
+        pendingApproval: PendingApproval? = nil,
+        lastOutputMarkdown: String? = nil,
+        errorBanner: String? = nil,
+        sourceFilePath: String? = nil,
+        startedAt: Date = Date(),
+        lastActivityAt: Date = Date(),
+        isSeen: Bool = false
+    ) {
+        self.id = id
+        self.rawSessionID = rawSessionID
+        self.kind = kind
+        self.host = host
+        self.title = title
+        self.overview = overview
+        self.status = status
+        self.statusIsInferred = statusIsInferred
+        self.cwd = cwd
+        self.groupDirectory = groupDirectory
+        self.provider = provider
+        self.model = model
+        self.reasoningEffort = reasoningEffort
+        self.usage = usage
+        self.contextUsedTokens = contextUsedTokens
+        self.contextWindow = contextWindow
+        self.currentTool = currentTool
+        self.recentTools = recentTools
+        self.totalToolCalls = totalToolCalls
+        self.successfulToolCalls = successfulToolCalls
+        self.turnCount = turnCount
+        self.compactCount = compactCount
+        self.outputTokensPerSecond = outputTokensPerSecond
+        self.process = process
+        self.pendingApproval = pendingApproval
+        self.lastOutputMarkdown = lastOutputMarkdown
+        self.errorBanner = errorBanner
+        self.sourceFilePath = sourceFilePath
+        self.startedAt = startedAt
+        self.lastActivityAt = lastActivityAt
+        self.isSeen = isSeen
+    }
+
+    public var contextRatio: Double? {
+        guard let used = contextUsedTokens, let window = contextWindow, window > 0 else {
+            return nil
+        }
+        return min(1.0, max(0.0, Double(used) / Double(window)))
+    }
+
+    public var resumeCommand: String? {
+        switch kind {
+        case .claudeCode:
+            return "claude --resume \(rawSessionID)"
+        case .codexCLI, .codexDesktop:
+            return "codex resume \(rawSessionID)"
+        default:
+            return nil
+        }
+    }
+}
+
+public struct DirectorySessionGroup: Identifiable, Hashable, Sendable {
+    public var id: String
+    public var host: HostID
+    public var directory: String?
+    public var displayName: String
+    public var abbreviatedPath: String
+    public var sessions: [AgentSession]
+
+    public init(
+        host: HostID,
+        directory: String?,
+        displayName: String,
+        abbreviatedPath: String,
+        sessions: [AgentSession]
+    ) {
+        self.id = "\(host.storageKey)::\(directory ?? "__chat__")"
+        self.host = host
+        self.directory = directory
+        self.displayName = displayName
+        self.abbreviatedPath = abbreviatedPath
+        self.sessions = sessions
+    }
+
+    public var mostUrgentStatus: SessionStatus {
+        sessions.map(\.status).min() ?? .idle
+    }
+
+    public var lastActivityAt: Date {
+        sessions.map(\.lastActivityAt).max() ?? .distantPast
+    }
+}
+
+public struct HostSessionGroup: Identifiable, Hashable, Sendable {
+    public var id: String { host.storageKey }
+    public var host: HostID
+    public var connection: HostConnectionState
+    public var directories: [DirectorySessionGroup]
+
+    public init(
+        host: HostID,
+        connection: HostConnectionState,
+        directories: [DirectorySessionGroup]
+    ) {
+        self.host = host
+        self.connection = connection
+        self.directories = directories
+    }
+
+    public var totalSessionCount: Int {
+        directories.reduce(0) { $0 + $1.sessions.count }
+    }
+}
+
+public enum MenuBarIconStyle: String, Codable, CaseIterable, Sendable {
+    case multiDot = "multiDot"
+    case singlePriority = "singlePriority"
+
+    public var title: String {
+        switch self {
+        case .multiDot: return "样式 B：多点计数（默认）"
+        case .singlePriority: return "样式 A：总数 + 单个状态点"
+        }
+    }
+}
+
+public struct MenuBarCounts: Equatable, Sendable {
+    public var failed: Int = 0
+    public var awaitingApproval: Int = 0
+    public var completedUnseen: Int = 0
+    public var activeGenerating: Int = 0
+
+    public init(
+        failed: Int = 0,
+        awaitingApproval: Int = 0,
+        completedUnseen: Int = 0,
+        activeGenerating: Int = 0
+    ) {
+        self.failed = failed
+        self.awaitingApproval = awaitingApproval
+        self.completedUnseen = completedUnseen
+        self.activeGenerating = activeGenerating
+    }
+
+    public var totalHighlighted: Int {
+        failed + awaitingApproval + completedUnseen + activeGenerating
+    }
+}

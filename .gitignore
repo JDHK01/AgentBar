@@ -1,0 +1,21 @@
+# Swift Package Manager & Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+
+# Build & packaging outputs
+dist/
+
+# macOS
+.DS_Store
+
+# Never commit local session logs or databases
+*.jsonl
+*.vscdb
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.agentbar-bak
+audit.log
