@@ -516,7 +516,11 @@ final class AppModel {
         let subagents = includeSubagents
         let seen = seenSessionIDs
 
-        async let claudeList = ClaudeCodeAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
+        async let claudeList = ClaudeCodeAdapter.loadLocalSessions(
+            lookbackHours: lookback,
+            includeSubagents: subagents,
+            seenSessionIDs: seen
+        )
         async let codexList = CodexAdapter.loadLocalSessions(lookbackHours: lookback, includeSubagents: subagents, seenSessionIDs: seen)
         async let dshList = DeepSeekHarnessAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
         async let cursorList = CursorTraeAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
@@ -777,8 +781,10 @@ final class AppModel {
         let ud = UserDefaults.standard
         let needsAutoEnableMigration = !ud.bool(forKey: "sshAutoEnableMigratedV2")
         let discovered = SSHProbeService.discoverSSHConfigEntries()
+        let discoveredAliases = Set(discovered.map(\.alias))
         let cleanedExisting = sshHosts.filter {
             !SSHProbeService.isIgnoredGitOrWildcardHost(alias: $0.alias, hostname: $0.hostname, user: $0.user)
+                && (discoveredAliases.contains($0.alias) || $0.hostname == nil)
         }
         var existingByAlias = Dictionary(uniqueKeysWithValues: cleanedExisting.map { ($0.alias, $0) })
 

@@ -62,7 +62,9 @@ struct AgentBarHookMain {
                     }
                 }
                 for await (idx, res) in group {
-                    print("SSH host #\(idx): online=\(res.connection.isOnline), latency=\(res.connection.latencyMs ?? -1)ms, sessions=\(res.sessions.count), err=\(res.connection.errorMessage ?? "none")")
+                    let claudeCount = res.sessions.filter { $0.kind == .claudeCode }.count
+                    let runningCount = res.sessions.filter { StatusCategoryFilter.running.matches($0) }.count
+                    print("SSH host #\(idx): online=\(res.connection.isOnline), latency=\(res.connection.latencyMs ?? -1)ms, sessions=\(res.sessions.count) (claude=\(claudeCount), running=\(runningCount)), err=\(res.connection.errorMessage ?? "none")")
                 }
             }
         }

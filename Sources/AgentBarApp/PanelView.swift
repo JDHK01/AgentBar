@@ -203,7 +203,17 @@ struct PanelView: View {
         let counts = model.menuBarCounts
         let hostSummaries = model.allHostSummaries
         return VStack(spacing: 6) {
-            HStack(spacing: 6) {
+            HStack(spacing: 5) {
+                StatusFilterPillView(
+                    category: .running,
+                    count: counts.activeGenerating,
+                    isSelected: model.selectedCategory == .running
+                ) {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.toggleStatusCategory(.running)
+                    }
+                }
+
                 StatusFilterPillView(
                     category: .completedUnseen,
                     count: counts.completedUnseen,

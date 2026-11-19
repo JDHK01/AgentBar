@@ -77,9 +77,15 @@ public enum SSHProbeService {
 
         var results: [SSHHostConfig] = []
         var seenAliases: Set<String> = []
+        var seenEndpoints: Set<String> = []
         for stanza in rawStanzas {
             for alias in stanza.aliases {
                 if isIgnoredGitOrWildcardHost(alias: alias, hostname: stanza.hostname, user: stanza.user) {
+                    continue
+                }
+                let endpointHost = (stanza.hostname ?? alias).lowercased()
+                let endpointKey = "\(endpointHost)|\(stanza.port ?? 22)"
+                if !seenEndpoints.insert(endpointKey).inserted {
                     continue
                 }
                 if seenAliases.insert(alias).inserted {
@@ -298,9 +304,22 @@ if [ -d "$HOME/.claude/projects" ]; then
   list_recent_files "$HOME/.claude/projects" '*.jsonl' 12 | while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now_ts")
+    sub_dir="${f%.jsonl}/subagents"
+    if [ -d "$sub_dir" ]; then
+      sub_f=$(find "$sub_dir" -name '*.jsonl' -type f -exec ls -1t {} + 2>/dev/null | head -n 1)
+      if [ -n "$sub_f" ]; then
+        sub_mt=$(stat -c %Y "$sub_f" 2>/dev/null || stat -f %m "$sub_f" 2>/dev/null || echo 0)
+        if [ "$sub_mt" -gt "$mt" ] 2>/dev/null; then
+          mt="$sub_mt"
+        fi
+      fi
+    fi
     printf "@@BEGIN claude %s %s\n" "$mt" "$f"
-    head -n 3 "$f" 2>/dev/null
-    tail -c 120000 "$f" 2>/dev/null
+    head -n 15 "$f" 2>/dev/null
+    printf "\n"
+    grep -E '"type":"(ai-title|custom-title)"' "$f" 2>/dev/null | tail -n 3
+    printf "\n"
+    tail -c 160000 "$f" 2>/dev/null
     printf "\n@@END\n"
   done
 fi
@@ -316,8 +335,9 @@ if [ -d "$HOME/.codex/sessions" ]; then
     [ -n "$f" ] && [ -f "$f" ] || continue
     mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now_ts")
     printf "@@BEGIN codex %s %s\n" "$mt" "$f"
-    head -n 3 "$f" 2>/dev/null
-    tail -c 120000 "$f" 2>/dev/null
+    head -n 10 "$f" 2>/dev/null
+    printf "\n"
+    tail -c 160000 "$f" 2>/dev/null
     printf "\n@@END\n"
   done
 fi
@@ -623,6 +643,10 @@ fi
                 return false
             }) {
                 sessions[idx].process = proc
+                if proc.cpuPercent >= 1.5 && sessions[idx].status == .waitingForInput {
+                    sessions[idx].status = .generating
+                    sessions[idx].statusIsInferred = true
+                }
             }
         }
     }

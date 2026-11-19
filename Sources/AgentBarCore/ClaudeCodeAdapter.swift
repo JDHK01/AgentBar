@@ -32,12 +32,17 @@ public enum ClaudeCodeAdapter {
     public static func loadLocalSessions(
         homeDirectory: String = NSHomeDirectory(),
         lookbackHours: Double = 72,
+        includeSubagents: Bool = false,
         seenSessionIDs: Set<String> = []
     ) async -> [AgentSession] {
         let rootPath = (homeDirectory as NSString).appendingPathComponent(".claude/projects")
         let provider = detectLocalProvider(homeDirectory: homeDirectory)
         let cutoff = Date().addingTimeInterval(-lookbackHours * 3600)
-        let candidates = collectRecentJSONLFiles(rootPath: rootPath, cutoff: cutoff)
+        let candidates = collectRecentJSONLFiles(
+            rootPath: rootPath,
+            cutoff: cutoff,
+            includeSubagents: includeSubagents
+        )
 
         var results: [AgentSession] = []
         for item in candidates.prefix(35) {
@@ -59,7 +64,11 @@ public enum ClaudeCodeAdapter {
         return results
     }
 
-    public static func collectRecentJSONLFiles(rootPath: String, cutoff: Date) -> [(url: URL, mtime: Date)] {
+    public static func collectRecentJSONLFiles(
+        rootPath: String,
+        cutoff: Date,
+        includeSubagents: Bool = false
+    ) -> [(url: URL, mtime: Date)] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: rootPath),
               let enumerator = fm.enumerator(
@@ -70,13 +79,30 @@ public enum ClaudeCodeAdapter {
             return []
         }
         var candidates: [(url: URL, mtime: Date)] = []
+        var subagentNewestByParentPath: [String: Date] = [:]
         while let obj = enumerator.nextObject() {
             guard let url = obj as? URL, url.pathExtension == "jsonl" else { continue }
             let vals = try? url.resourceValues(forKeys: [.isRegularFileKey, .contentModificationDateKey])
             guard vals?.isRegularFile == true else { continue }
             let mtime = vals?.contentModificationDate ?? .distantPast
+            let pathStr = url.path
+            if !includeSubagents, let subRange = pathStr.range(of: "/subagents/") {
+                let parentPrefix = String(pathStr[..<subRange.lowerBound]) + ".jsonl"
+                if let prev = subagentNewestByParentPath[parentPrefix] {
+                    if mtime > prev { subagentNewestByParentPath[parentPrefix] = mtime }
+                } else {
+                    subagentNewestByParentPath[parentPrefix] = mtime
+                }
+                continue
+            }
             if mtime >= cutoff {
                 candidates.append((url, mtime))
+            }
+        }
+        for idx in candidates.indices {
+            if let subMtime = subagentNewestByParentPath[candidates[idx].url.path],
+               subMtime > candidates[idx].mtime {
+                candidates[idx].mtime = subMtime
             }
         }
         candidates.sort { $0.mtime > $1.mtime }
@@ -127,6 +153,20 @@ public enum ClaudeCodeAdapter {
             if let dir = obj["cwd"] as? String, !dir.isEmpty {
                 cwd = dir
             }
+            if let attachment = obj["attachment"] as? [String: Any] {
+                let attType = (attachment["type"] as? String) ?? ""
+                if attType == "environment",
+                   let snap = attachment["snapshot"] as? [String: Any],
+                   let wdir = snap["workingDirectory"] as? String,
+                   !wdir.isEmpty {
+                    if cwd == nil { cwd = wdir }
+                } else if attType == "model",
+                          let ident = attachment["identity"] as? [String: Any],
+                          let mid = ident["modelId"] as? String,
+                          !mid.isEmpty {
+                    if model == nil { model = mid }
+                }
+            }
             let eventDate = parseISODate(obj["timestamp"] as? String)
             if let eventDate {
                 if startedAt == nil { startedAt = eventDate }
@@ -145,6 +185,9 @@ public enum ClaudeCodeAdapter {
                 }
             case "compact_boundary", "summary":
                 compactCount += 1
+            case "api-request", "api-request-blob":
+                lastEventKind = "api_request"
+                lastStopReason = nil
             case "user":
                 guard let msg = obj["message"] as? [String: Any] else { continue }
                 if let text = msg["content"] as? String {
@@ -261,9 +304,18 @@ public enum ClaudeCodeAdapter {
             }
         }
 
+        let hasRealActivity = turnCount > 0
+            || !usageByMessageID.isEmpty
+            || anonymousUsage.totalTokens > 0
+            || lastAssistantText != nil
+            || !openTools.isEmpty
+            || lastEventKind == "api_request"
+
         let finalTitle = customTitle
             ?? aiTitle
             ?? firstUserPrompt.map { firstSingleLine($0, maxLength: 44) }
+            ?? (hasRealActivity ? lastAssistantText.map { firstSingleLine($0, maxLength: 44) } : nil)
+            ?? (hasRealActivity ? cwd.map { "\(URL(fileURLWithPath: $0).lastPathComponent) 会话" } : nil)
 
         guard let finalTitle, !finalTitle.isEmpty else {
             return nil
@@ -292,14 +344,18 @@ public enum ClaudeCodeAdapter {
         var statusInferred = false
         if errorBanner != nil && ageSeconds < 7200 {
             status = .failed
-        } else if currentTool != nil && ageSeconds < 900 {
+        } else if currentTool != nil && ageSeconds < 1800 {
             if ageSeconds > 8 && ageSeconds < 300 {
                 status = .runningTool
                 statusInferred = true
             } else {
                 status = .runningTool
             }
-        } else if (lastEventKind == "user_prompt" || lastEventKind == "tool_result" || lastStopReason == nil) && ageSeconds < 180 {
+        } else if (lastEventKind == "api_request"
+            || lastEventKind == "user_prompt"
+            || lastEventKind == "tool_result"
+            || lastStopReason == "tool_use"
+            || lastStopReason == nil) && ageSeconds < 600 {
             status = .generating
         } else if !isSeen && ageSeconds < 1800 && lastAssistantText != nil {
             status = .completed
@@ -321,6 +377,16 @@ public enum ClaudeCodeAdapter {
         }
 
         let contextWindow = PricingCatalog.defaultContextWindow(for: model)
+        let resolvedProvider: String
+        if defaultProvider == "Anthropic",
+           let m = model,
+           let slashIdx = m.firstIndex(of: "/"),
+           slashIdx > m.startIndex {
+            let prefix = String(m[..<slashIdx])
+            resolvedProvider = FormattingHelpers.providerDisplay(from: prefix) ?? prefix
+        } else {
+            resolvedProvider = defaultProvider
+        }
         return AgentSession(
             id: sessionID,
             rawSessionID: rawSessionID,
@@ -332,7 +398,7 @@ public enum ClaudeCodeAdapter {
             statusIsInferred: statusInferred,
             cwd: cwd,
             groupDirectory: cwd,
-            provider: defaultProvider,
+            provider: resolvedProvider,
             model: model,
             usage: totalUsage,
             contextUsedTokens: lastPromptTokens,

@@ -141,7 +141,7 @@ struct StatusFilterPillView: View {
                     .foregroundStyle(count > 0 || isSelected ? textColor : .secondary)
             }
             .fixedSize()
-            .padding(.horizontal, 9)
+            .padding(.horizontal, 7.5)
             .padding(.vertical, 4)
             .background(
                 Capsule()

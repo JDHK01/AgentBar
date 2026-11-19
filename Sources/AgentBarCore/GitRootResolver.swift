@@ -250,7 +250,7 @@ public enum SessionGroupingBuilder {
                 counts.awaitingApproval += 1
             case .completed:
                 if !s.isSeen { counts.completedUnseen += 1 }
-            case .generating, .runningTool:
+            case .generating, .runningTool, .runningProcessOnly:
                 counts.activeGenerating += 1
             default:
                 break

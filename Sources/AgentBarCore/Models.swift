@@ -522,6 +522,7 @@ public struct HostSessionGroup: Identifiable, Hashable, Sendable {
 }
 
 public enum StatusCategoryFilter: String, Codable, CaseIterable, Identifiable, Sendable {
+    case running
     case completedUnseen
     case awaitingApproval
     case failed
@@ -530,6 +531,7 @@ public enum StatusCategoryFilter: String, Codable, CaseIterable, Identifiable, S
 
     public var title: String {
         switch self {
+        case .running: return "运行中"
         case .completedUnseen: return "新生成"
         case .awaitingApproval: return "待审批"
         case .failed: return "错误"
@@ -538,6 +540,7 @@ public enum StatusCategoryFilter: String, Codable, CaseIterable, Identifiable, S
 
     public var representativeStatus: SessionStatus {
         switch self {
+        case .running: return .generating
         case .completedUnseen: return .completed
         case .awaitingApproval: return .awaitingApproval
         case .failed: return .failed
@@ -546,6 +549,10 @@ public enum StatusCategoryFilter: String, Codable, CaseIterable, Identifiable, S
 
     public func matches(_ session: AgentSession) -> Bool {
         switch self {
+        case .running:
+            return session.status == .generating
+                || session.status == .runningTool
+                || session.status == .runningProcessOnly
         case .completedUnseen:
             return session.status == .completed && !session.isSeen
         case .awaitingApproval:
