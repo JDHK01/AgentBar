@@ -12,14 +12,16 @@ struct PanelView: View {
         VStack(spacing: 0) {
             VStack(spacing: 0) {
                 headerBar
-                if model.isSearchVisible {
+                if model.isSearchVisible && !model.isShowingOverview {
                     searchBar
                 }
                 summaryChipsRow
-                if !model.balanceReadings.isEmpty {
+                if !model.isShowingOverview && !model.balanceReadings.isEmpty {
                     balancesRow
                 }
-                filterPicker
+                if !model.isShowingOverview {
+                    filterPicker
+                }
             }
             .fixedSize(horizontal: false, vertical: true)
             .layoutPriority(2)
@@ -60,15 +62,16 @@ struct PanelView: View {
             Text("AgentBar")
                 .font(.system(size: 15, weight: .bold))
 
-            Button {
-                model.demoModeEnabled.toggle()
-            } label: {
-                Text(model.demoModeEnabled ? "演示数据" : "实时数据")
-                    .font(.system(size: 10.5, weight: .semibold))
+            overviewToggleButton
+
+            if model.demoModeEnabled {
+                Text("演示")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 5)
+                    .padding(.vertical, 1.5)
+                    .background(Capsule().fill(.white.opacity(0.28)))
             }
-            .controlSize(.mini)
-            .buttonStyle(.glass)
-            .help("一键切换真实本机数据与完整原型演示数据")
 
             Spacer()
 
@@ -129,6 +132,41 @@ struct PanelView: View {
         .padding(.bottom, 8)
     }
 
+    @ViewBuilder
+    private var overviewToggleButton: some View {
+        let todayTok = FormattingHelpers.compactTokens(model.totalAnalytics.todayUsage.totalTokens)
+        let label = HStack(spacing: 4) {
+            Image(systemName: model.isShowingOverview ? "chevron.left" : "chart.bar.xaxis")
+                .font(.system(size: 9.5, weight: .semibold))
+            Text(model.isShowingOverview ? "返回会话" : "总数据 · \(todayTok)")
+                .font(.system(size: 10.5, weight: .semibold))
+                .monospacedDigit()
+        }
+        if model.isShowingOverview {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    model.isShowingOverview = false
+                }
+            } label: {
+                label
+            }
+            .controlSize(.mini)
+            .buttonStyle(.glassProminent)
+            .help("返回会话列表")
+        } else {
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    model.isShowingOverview = true
+                }
+            } label: {
+                label
+            }
+            .controlSize(.mini)
+            .buttonStyle(.glass)
+            .help("查看会员额度、Dashboard 看板、今日 Token 与全局统计")
+        }
+    }
+
     private var searchBar: some View {
         HStack(spacing: 6) {
             Image(systemName: "magnifyingglass")
@@ -187,7 +225,9 @@ struct PanelView: View {
                 spacing: 7
             ) {
                 ForEach(model.balanceReadings) { reading in
-                    BalanceCardView(reading: reading)
+                    BalanceCardView(reading: reading) {
+                        model.openDashboardWindow(for: reading)
+                    }
                 }
             }
         }
@@ -211,7 +251,12 @@ struct PanelView: View {
         let hostGroups = model.filteredHostGroups
         return ScrollView(.vertical, showsIndicators: true) {
             Group {
-                if hostGroups.isEmpty || hostGroups.allSatisfy({ $0.directories.isEmpty }) {
+                if model.isShowingOverview {
+                    OverviewDashboardView(model: model) {
+                        model.selectedSettingsTab = 3
+                        onOpenSettings()
+                    }
+                } else if hostGroups.isEmpty || hostGroups.allSatisfy({ $0.directories.isEmpty }) {
                     emptyPlaceholder
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
@@ -240,7 +285,7 @@ struct PanelView: View {
                 .foregroundStyle(.secondary)
             Text(model.filterMode == .all ? "暂无匹配的 Agent 会话" : "当前筛选下没有会话")
                 .font(.system(size: 13, weight: .semibold))
-            Text("在终端或桌面启动 Claude Code、Codex、DeepSeek Harness 或 Cursor 后会自动显示在这里，也可点击顶部“实时数据”切换到演示数据预览全部交互。")
+            Text("在终端或桌面启动 Claude Code、Codex、DeepSeek Harness 或 Cursor 后会自动显示在这里，也可在设置中开启演示数据预览全部交互。")
                 .font(.system(size: 11.5))
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

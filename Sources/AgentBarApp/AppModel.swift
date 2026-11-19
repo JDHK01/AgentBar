@@ -28,8 +28,17 @@ final class AppModel {
     var hostStates: [HostID: HostConnectionState] = [.local: HostConnectionState(host: .local, isOnline: true)]
     var remoteHomes: [HostID: String] = [:]
     var balanceReadings: [BalanceReading] = []
+    var subscriptionCards: [SubscriptionCardItem] = []
 
-    var filterMode: SessionFilterMode = .all
+    var isShowingOverview: Bool = false
+    var selectedSettingsTab: Int = 0
+    var filterMode: SessionFilterMode = .all {
+        didSet {
+            if isShowingOverview {
+                isShowingOverview = false
+            }
+        }
+    }
     var searchQuery: String = ""
     var isSearchVisible: Bool = false
     var expandedSessionIDs: Set<String> = []
@@ -105,6 +114,14 @@ final class AppModel {
 
     var menuBarCounts: MenuBarCounts {
         SessionGroupingBuilder.computeMenuBarCounts(sessions: sessions)
+    }
+
+    var totalAnalytics: TotalAnalyticsSnapshot {
+        SubscriptionAndStatsService.buildAnalytics(
+            sessions: sessions,
+            demoMode: demoModeEnabled,
+            homeByHost: remoteHomes
+        )
     }
 
     var filteredHostGroups: [HostSessionGroup] {
@@ -287,6 +304,7 @@ final class AppModel {
             self.sessions = demo.sessions
             self.hostStates = demo.hostStates
             self.balanceReadings = demo.balances
+            self.subscriptionCards = demo.subscriptions
             if expandedSessionIDs.isEmpty {
                 expandedSessionIDs = ["demo:claude:acmecore", "demo:codex:acmecore-test"]
             }
@@ -326,6 +344,7 @@ final class AppModel {
         let remoteExisting = sessions.filter { !$0.host.isLocal }
         self.sessions = local + remoteExisting
         self.hostStates[.local] = HostConnectionState(host: .local, isOnline: true)
+        self.subscriptionCards = SubscriptionAndStatsService.detectLocalSubscriptions(sessions: self.sessions)
         notifyStatusBar()
     }
 
@@ -380,6 +399,33 @@ final class AppModel {
             updated.append(reading)
         }
         balanceReadings = updated
+    }
+
+    func openDashboardWindow(for reading: BalanceReading) {
+        guard let src = balanceSources.first(where: { $0.id == reading.sourceID }) else {
+            if let urlStr = reading.dashboardURL, let url = URL(string: urlStr) {
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
+        openDashboardWindow(for: src)
+    }
+
+    func openDashboardWindow(for source: BalanceSourceConfig) {
+        WebBalanceExtractor.shared.openInteractiveLoginWindow(
+            urlString: source.urlOrCommand,
+            title: source.name,
+            extractorExpression: source.extractorOrJSONPath
+        ) { [weak self] rawPayload in
+            guard let self else { return }
+            let updatedReading = BalanceService.parseWebPayload(rawJSONOrString: rawPayload, source: source)
+            if let idx = self.balanceReadings.firstIndex(where: { $0.sourceID == source.id }) {
+                self.balanceReadings[idx] = updatedReading
+            } else {
+                self.balanceReadings.append(updatedReading)
+            }
+            self.balanceTestMessage[source.id] = "已自动同步：\(updatedReading.formattedValue)"
+        }
     }
 
     private func mergePendingApprovals(

@@ -120,18 +120,31 @@ struct MetricChipView: View {
 
 struct BalanceCardView: View {
     let reading: BalanceReading
+    var onOpenDashboard: (() -> Void)? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
-            Text(reading.name)
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
+            HStack(spacing: 4) {
+                Text(reading.name)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                Spacer(minLength: 2)
+                if reading.sourceType == .webExtract, onOpenDashboard != nil {
+                    Image(systemName: reading.needsLogin ? "person.badge.key.fill" : "arrow.up.right.square")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .foregroundStyle(reading.needsLogin ? Color.orange : Color.accentColor)
+                }
+            }
 
             Text(reading.formattedValue)
                 .font(.system(size: 15.5, weight: .bold, design: .rounded))
                 .monospacedDigit()
-                .foregroundStyle(reading.isLow ? Color(red: 0.84, green: 0.05, blue: 0.09) : .primary)
+                .foregroundStyle(
+                    reading.isLow
+                        ? Color(red: 0.84, green: 0.05, blue: 0.09)
+                        : (reading.needsLogin ? Color.accentColor : .primary)
+                )
                 .lineLimit(1)
 
             if let frac = reading.usedFraction {
@@ -157,6 +170,13 @@ struct BalanceCardView: View {
         .padding(.vertical, 8)
         .frame(maxWidth: .infinity, alignment: .leading)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .onTapGesture {
+            if reading.sourceType == .webExtract {
+                onOpenDashboard?()
+            }
+        }
+        .help(reading.sourceType == .webExtract ? "点击打开 Dashboard 页面或完成 SSO 登录同步" : reading.name)
     }
 }
 

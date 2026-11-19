@@ -61,30 +61,39 @@ public struct BalanceReading: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID { sourceID }
     public var sourceID: UUID
     public var name: String
+    public var sourceType: BalanceSourceType
+    public var dashboardURL: String?
     public var formattedValue: String
     public var numericValue: Double?
     public var usedFraction: Double?
     public var footnote: String
     public var isLow: Bool
+    public var needsLogin: Bool
     public var updatedAt: Date
 
     public init(
         sourceID: UUID,
         name: String,
+        sourceType: BalanceSourceType = .webExtract,
+        dashboardURL: String? = nil,
         formattedValue: String,
         numericValue: Double? = nil,
         usedFraction: Double? = nil,
         footnote: String,
         isLow: Bool = false,
+        needsLogin: Bool = false,
         updatedAt: Date = Date()
     ) {
         self.sourceID = sourceID
         self.name = name
+        self.sourceType = sourceType
+        self.dashboardURL = dashboardURL
         self.formattedValue = formattedValue
         self.numericValue = numericValue
         self.usedFraction = usedFraction
         self.footnote = footnote
         self.isLow = isLow
+        self.needsLogin = needsLogin
         self.updatedAt = updatedAt
     }
 }
@@ -123,10 +132,100 @@ public enum KeychainStore {
 }
 
 public enum BalanceService {
+    public static func parseWebPayload(
+        rawJSONOrString: String,
+        source: BalanceSourceConfig
+    ) -> BalanceReading {
+        let dashboardURL = source.type == .webExtract ? source.urlOrCommand : nil
+        if let data = rawJSONOrString.data(using: .utf8),
+           let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           obj["_agentbarSmart"] as? Bool == true {
+            if obj["needsLogin"] as? Bool == true {
+                return BalanceReading(
+                    sourceID: source.id,
+                    name: source.name,
+                    sourceType: source.type,
+                    dashboardURL: dashboardURL,
+                    formattedValue: "点击登录 SSO",
+                    footnote: "登录后自动同步余额与额度",
+                    isLow: false,
+                    needsLogin: true
+                )
+            }
+            let primary = (obj["primary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let secondary = (obj["secondary"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let frac = (obj["usedFraction"] as? NSNumber)?.doubleValue
+            let num = extractFirstDouble(from: primary)
+            let isLow = (num != nil && source.lowBalanceThreshold != nil) ? (num! < source.lowBalanceThreshold!) : false
+
+            let displayValue: String
+            if !primary.isEmpty {
+                displayValue = primary
+            } else if let num {
+                displayValue = String(format: "%@%.2f", source.currencySymbol, num)
+            } else {
+                displayValue = "已连接看板"
+            }
+
+            let foot: String
+            if !secondary.isEmpty {
+                foot = String(secondary.prefix(34))
+            } else if isLow {
+                foot = "低于阈值 \(source.currencySymbol)\(Int(source.lowBalanceThreshold ?? 0))"
+            } else {
+                foot = "点击打开完整看板 · 刚刚"
+            }
+
+            return BalanceReading(
+                sourceID: source.id,
+                name: source.name,
+                sourceType: source.type,
+                dashboardURL: dashboardURL,
+                formattedValue: String(displayValue.prefix(20)),
+                numericValue: num,
+                usedFraction: frac,
+                footnote: foot,
+                isLow: isLow,
+                needsLogin: false
+            )
+        }
+
+        guard let number = extractFirstDouble(from: rawJSONOrString) else {
+            let trimmed = rawJSONOrString.trimmingCharacters(in: .whitespacesAndNewlines)
+            return BalanceReading(
+                sourceID: source.id,
+                name: source.name,
+                sourceType: source.type,
+                dashboardURL: dashboardURL,
+                formattedValue: trimmed.isEmpty ? "点击查看看板" : String(trimmed.prefix(16)),
+                footnote: source.type == .webExtract ? "点击打开 SSO 看板同步" : "刚刚更新",
+                isLow: false,
+                needsLogin: trimmed.isEmpty && source.type == .webExtract
+            )
+        }
+        let isLow = source.lowBalanceThreshold.map { number < $0 } ?? false
+        let formatted = String(format: "%@%.2f", source.currencySymbol, number)
+        let foot = isLow
+            ? "低于阈值 \(source.currencySymbol)\(Int(source.lowBalanceThreshold ?? 0))"
+            : "\(source.type.title) · 刚刚"
+        return BalanceReading(
+            sourceID: source.id,
+            name: source.name,
+            sourceType: source.type,
+            dashboardURL: dashboardURL,
+            formattedValue: formatted,
+            numericValue: number,
+            usedFraction: isLow ? 0.85 : nil,
+            footnote: foot,
+            isLow: isLow
+        )
+    }
+
     public static func fetchReading(
         for source: BalanceSourceConfig,
         webEvaluator: (@Sendable (URL, String) async throws -> String)? = nil
     ) async -> BalanceReading {
+        let dashboardURL = source.type == .webExtract ? source.urlOrCommand : nil
         do {
             let rawString: String
             switch source.type {
@@ -138,40 +237,22 @@ public enum BalanceService {
                 guard let url = URL(string: source.urlOrCommand), let webEvaluator else {
                     throw NSError(domain: "BalanceService", code: 1, userInfo: [NSLocalizedDescriptionKey: "URL 无效"])
                 }
-                let expr = source.extractorOrJSONPath.isEmpty ? "document.body.innerText" : source.extractorOrJSONPath
+                let trimmedExpr = source.extractorOrJSONPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                let expr = trimmedExpr.isEmpty ? "auto" : trimmedExpr
                 rawString = try await webEvaluator(url, expr)
             }
 
-            guard let number = extractFirstDouble(from: rawString) else {
-                return BalanceReading(
-                    sourceID: source.id,
-                    name: source.name,
-                    formattedValue: rawString.isEmpty ? "—" : String(rawString.prefix(14)),
-                    footnote: "刚刚更新",
-                    isLow: false
-                )
-            }
-            let isLow = source.lowBalanceThreshold.map { number < $0 } ?? false
-            let formatted = String(format: "%@%.2f", source.currencySymbol, number)
-            let foot = isLow
-                ? "低于阈值 \(source.currencySymbol)\(Int(source.lowBalanceThreshold ?? 0))"
-                : "\(source.type.title) · 刚刚"
-            return BalanceReading(
-                sourceID: source.id,
-                name: source.name,
-                formattedValue: formatted,
-                numericValue: number,
-                usedFraction: isLow ? 0.85 : 0.35,
-                footnote: foot,
-                isLow: isLow
-            )
+            return parseWebPayload(rawJSONOrString: rawString, source: source)
         } catch {
             return BalanceReading(
                 sourceID: source.id,
                 name: source.name,
+                sourceType: source.type,
+                dashboardURL: dashboardURL,
                 formattedValue: "获取失败",
                 footnote: String(error.localizedDescription.prefix(24)),
-                isLow: false
+                isLow: false,
+                needsLogin: source.type == .webExtract
             )
         }
     }

@@ -6,18 +6,22 @@ struct SettingsWindowView: View {
     @Bindable var model: AppModel
 
     var body: some View {
-        TabView {
+        TabView(selection: $model.selectedSettingsTab) {
             generalTab
                 .tabItem { Label("通用与外观", systemImage: "slider.horizontal.3") }
+                .tag(0)
 
             hooksApprovalTab
                 .tabItem { Label("一键审批 Hooks", systemImage: "checkmark.shield") }
+                .tag(1)
 
             sshHostsTab
                 .tabItem { Label("SSH 服务器", systemImage: "server.rack") }
+                .tag(2)
 
             balancesTab
                 .tabItem { Label("余额 Dashboard", systemImage: "creditcard") }
+                .tag(3)
         }
         .padding(16)
         .frame(width: 620, height: 500)
@@ -175,7 +179,7 @@ struct SettingsWindowView: View {
                         name: "内部 SSO Dashboard",
                         type: .webExtract,
                         urlOrCommand: "https://",
-                        extractorOrJSONPath: ".balance-amount",
+                        extractorOrJSONPath: "",
                         currencySymbol: "$",
                         lowBalanceThreshold: 200
                     ))
@@ -239,7 +243,7 @@ struct SettingsWindowView: View {
                         .foregroundStyle(.secondary)
                         .frame(width: 72, alignment: .trailing)
                     TextField(
-                        item.type == .jsonAPI ? "balance_infos.0.total_balance" : "CSS 选择器（如 .balance）或 JS 表达式",
+                        item.type == .jsonAPI ? "balance_infos.0.total_balance" : "留空智能识别页面额度，或填 CSS 选择器 / JS 表达式",
                         text: source.extractorOrJSONPath
                     )
                     .textFieldStyle(.roundedBorder)
@@ -261,11 +265,8 @@ struct SettingsWindowView: View {
                     .textFieldStyle(.roundedBorder)
                     .frame(width: 240)
                 } else if item.type == .webExtract {
-                    Button("在 AgentBar 中登录（SSO）") {
-                        WebBalanceExtractor.shared.openInteractiveLoginWindow(
-                            urlString: item.urlOrCommand,
-                            title: item.name
-                        )
+                    Button("打开看板 / SSO 登录") {
+                        model.openDashboardWindow(for: source.wrappedValue)
                     }
                     .controlSize(.small)
                     .buttonStyle(.glass)

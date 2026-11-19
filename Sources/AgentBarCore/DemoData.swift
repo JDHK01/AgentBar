@@ -4,7 +4,8 @@ public enum DemoData {
     public static func makeShowcase() -> (
         sessions: [AgentSession],
         hostStates: [HostID: HostConnectionState],
-        balances: [BalanceReading]
+        balances: [BalanceReading],
+        subscriptions: [SubscriptionCardItem]
     ) {
         let now = Date()
         let home = NSHomeDirectory()
@@ -282,6 +283,32 @@ public enum DemoData {
             )
         ]
 
-        return ([s1, s2, s3, s4, s5, s6, s7, s8, s9], hostStates, balances)
+        let subscriptions: [SubscriptionCardItem] = [
+            SubscriptionCardItem(
+                id: "demo:sub:codex",
+                kind: .codexDesktop,
+                providerTitle: "OpenAI · Codex",
+                planBadge: "ChatGPT Plus",
+                subtitle: "有效期至 12-18 · 活跃路由",
+                quotas: [
+                    QuotaWindowReading(label: "5h 窗口", usedPercent: 12, resetsAt: now.addingTimeInterval(9600)),
+                    QuotaWindowReading(label: "7d 周额度", usedPercent: 17, resetsAt: now.addingTimeInterval(240_000))
+                ],
+                todayTokens: 904_400
+            ),
+            SubscriptionCardItem(
+                id: "demo:sub:claude",
+                kind: .claudeCode,
+                providerTitle: "Anthropic · Claude",
+                planBadge: "Claude Max",
+                subtitle: "claude-opus-5-5 · 今日高频使用",
+                quotas: [
+                    QuotaWindowReading(label: "5h 窗口", usedPercent: 28, resetsAt: now.addingTimeInterval(7200))
+                ],
+                todayTokens: 1_711_400
+            )
+        ]
+
+        return ([s1, s2, s3, s4, s5, s6, s7, s8, s9], hostStates, balances, subscriptions)
     }
 }
