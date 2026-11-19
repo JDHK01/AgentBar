@@ -1,5 +1,6 @@
 import AgentBarCore
 import AppKit
+import QuartzCore
 import SwiftUI
 
 final class FloatingGlassPanel: NSPanel {
@@ -7,10 +8,76 @@ final class FloatingGlassPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+final class ClearGlassHostView: NSView {
+    private let shadowCasterLayer = CALayer()
+    private let cutoutMaskLayer = CAShapeLayer()
+    weak var glassSubView: NSView?
+    let cornerRadius: CGFloat
+
+    init(frame: NSRect, cornerRadius: CGFloat) {
+        self.cornerRadius = cornerRadius
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.clear.cgColor
+        layer?.masksToBounds = false
+
+        shadowCasterLayer.backgroundColor = NSColor.clear.cgColor
+        shadowCasterLayer.shadowColor = NSColor.black.cgColor
+        shadowCasterLayer.shadowOpacity = 0.22
+        shadowCasterLayer.shadowRadius = 16
+        shadowCasterLayer.shadowOffset = CGSize(width: 0, height: -6)
+        cutoutMaskLayer.fillRule = .evenOdd
+        shadowCasterLayer.mask = cutoutMaskLayer
+        layer?.addSublayer(shadowCasterLayer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    override func layout() {
+        super.layout()
+        guard let glass = glassSubView else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        shadowCasterLayer.frame = bounds
+        let glassRect = glass.frame
+        let roundedPath = CGPath(
+            roundedRect: glassRect,
+            cornerWidth: cornerRadius,
+            cornerHeight: cornerRadius,
+            transform: nil
+        )
+        shadowCasterLayer.shadowPath = roundedPath
+
+        let maskPath = CGMutablePath()
+        maskPath.addRect(bounds.insetBy(dx: -80, dy: -80))
+        maskPath.addPath(roundedPath)
+        cutoutMaskLayer.frame = bounds
+        cutoutMaskLayer.path = maskPath
+        CATransaction.commit()
+    }
+
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard let glass = glassSubView else { return nil }
+        let inSelf = superview != nil ? convert(point, from: superview) : point
+        guard bounds.contains(inSelf), glass.frame.contains(inSelf) else {
+            return nil
+        }
+        return super.hitTest(point)
+    }
+}
+
 @MainActor
 final class StatusBarController: NSObject {
+    private static let shadowInset: CGFloat = 28
+    private static let glassCornerRadius: CGFloat = 22
+
     private let statusItem: NSStatusItem
     private let panel: FloatingGlassPanel
+    private var containerView: ClearGlassHostView?
+    private var glassView: NSGlassEffectView?
     private let model: AppModel
     private var settingsWindow: NSWindow?
     private var globalClickMonitor: Any?
@@ -24,7 +91,8 @@ final class StatusBarController: NSObject {
         self.model = model
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
-        let rect = NSRect(x: 0, y: 0, width: PanelView.panelWidth, height: 600)
+        let pad = Self.shadowInset
+        let rect = NSRect(x: 0, y: 0, width: PanelView.panelWidth + pad * 2, height: 600 + pad * 2)
         self.panel = FloatingGlassPanel(
             contentRect: rect,
             styleMask: [.borderless, .nonactivatingPanel],
@@ -53,16 +121,21 @@ final class StatusBarController: NSObject {
     }
 
     private func configurePanel() {
+        let pad = Self.shadowInset
         panel.isFloatingPanel = true
         panel.level = .popUpMenu
         panel.backgroundColor = .clear
         panel.isOpaque = false
-        panel.hasShadow = true
+        panel.hasShadow = false
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .transient]
 
-        let glassView = NSGlassEffectView(frame: NSRect(x: 0, y: 0, width: PanelView.panelWidth, height: 600))
+        let outerFrame = NSRect(x: 0, y: 0, width: PanelView.panelWidth + pad * 2, height: 600 + pad * 2)
+        let hostContainer = ClearGlassHostView(frame: outerFrame, cornerRadius: Self.glassCornerRadius)
+        hostContainer.autoresizingMask = [.width, .height]
+
+        let glassView = NSGlassEffectView(frame: NSRect(x: pad, y: pad, width: PanelView.panelWidth, height: 600))
         glassView.style = .regular
-        glassView.cornerRadius = 22
+        glassView.cornerRadius = Self.glassCornerRadius
         glassView.autoresizingMask = [.width, .height]
 
         let rootView = PanelView(model: model) { [weak self] in
@@ -70,6 +143,7 @@ final class StatusBarController: NSObject {
         }
         let hostingView = NSHostingView(rootView: rootView)
         hostingView.sizingOptions = []
+        hostingView.focusRingType = .none
         hostingView.translatesAutoresizingMaskIntoConstraints = false
         glassView.contentView = hostingView
         if let content = glassView.contentView {
@@ -80,7 +154,11 @@ final class StatusBarController: NSObject {
                 content.bottomAnchor.constraint(equalTo: glassView.bottomAnchor)
             ])
         }
-        panel.contentView = glassView
+        hostContainer.addSubview(glassView)
+        hostContainer.glassSubView = glassView
+        self.containerView = hostContainer
+        self.glassView = glassView
+        panel.contentView = hostContainer
     }
 
     func updateStatusButtonImage() {
@@ -144,6 +222,7 @@ final class StatusBarController: NSObject {
     }
 
     private func computeTargetPanelFrame() -> NSRect {
+        let pad = Self.shadowInset
         let panelWidth = PanelView.panelWidth
         let screenFrame = anchorScreen?.visibleFrame ?? NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
         let topY = anchorTopY ?? (screenFrame.maxY - 6.0)
@@ -153,9 +232,14 @@ final class StatusBarController: NSObject {
         let maxAllowedHeight = min(960, maxSpaceBelow)
         let panelHeight = round(min(maxAllowedHeight, max(200, model.preferredPanelHeight)))
 
-        let originX = round(max(screenFrame.minX + 8, min(midX - panelWidth / 2.0, screenFrame.maxX - panelWidth - 8)))
-        let originY = round(topY - panelHeight)
-        return NSRect(x: originX, y: originY, width: panelWidth, height: panelHeight)
+        let glassOriginX = round(max(screenFrame.minX + 8, min(midX - panelWidth / 2.0, screenFrame.maxX - panelWidth - 8)))
+        let glassOriginY = round(topY - panelHeight)
+        return NSRect(
+            x: glassOriginX - pad,
+            y: glassOriginY - pad,
+            width: panelWidth + pad * 2,
+            height: panelHeight + pad * 2
+        )
     }
 
     func closePanel() {
@@ -171,8 +255,9 @@ final class StatusBarController: NSObject {
             }
         }
         localKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
-            if event.keyCode == 53 { // Escape
-                self?.closePanel()
+            guard let self else { return event }
+            if event.type == .keyDown && event.keyCode == 53 { // Escape
+                self.closePanel()
                 return nil
             }
             return event

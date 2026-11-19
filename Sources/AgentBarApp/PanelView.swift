@@ -45,6 +45,8 @@ struct PanelView: View {
                 }
         }
         .frame(width: Self.panelWidth)
+        .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .focusEffectDisabled()
         .sheet(item: $model.confirmingHighRiskSession) { target in
             highRiskConfirmationSheet(target)
         }
