@@ -49,7 +49,10 @@ struct SettingsWindowView: View {
                 }
 
                 Toggle("使用演示数据预览完整状态（含待审批/SSH/余额卡片）", isOn: $model.demoModeEnabled)
-                Toggle("显示 Codex 内部子代理（Guardian / Subagent）", isOn: $model.includeSubagents)
+                Toggle("显示内部子代理会话（Codex / Claude Subagents）", isOn: $model.includeSubagents)
+                    .onChange(of: model.includeSubagents) { _, _ in
+                        Task { await model.refreshAll(includeBalances: false) }
+                    }
                 Toggle("会话待审批 / 完成时发送系统通知", isOn: $model.notificationsEnabled)
                 Toggle(
                     "登录 macOS 时自动启动 AgentBar",

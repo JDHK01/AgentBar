@@ -105,8 +105,9 @@ public enum SubscriptionAndStatsService {
         antigravityPlan: String? = nil,
         antigravityQuotas: [QuotaWindowReading] = []
     ) -> [SubscriptionCardItem] {
+        let uniqueSessions = SessionDeduplicator.deduplicate(sessions)
         let dayCutoff = Calendar.current.startOfDay(for: Date())
-        let todaySessions = sessions.filter { $0.lastActivityAt >= dayCutoff }
+        let todaySessions = uniqueSessions.filter { $0.lastActivityAt >= dayCutoff }
         var items: [SubscriptionCardItem] = []
 
         if let codexCard = detectCodexSubscription(homeDirectory: homeDirectory, todaySessions: todaySessions) {
@@ -118,7 +119,7 @@ public enum SubscriptionAndStatsService {
         if let dshCard = detectDeepSeekSubscription(homeDirectory: homeDirectory, todaySessions: todaySessions) {
             items.append(dshCard)
         }
-        if let antigravityCard = detectAntigravityCard(sessions: sessions, plan: antigravityPlan, quotas: antigravityQuotas) {
+        if let antigravityCard = detectAntigravityCard(sessions: uniqueSessions, plan: antigravityPlan, quotas: antigravityQuotas) {
             items.append(antigravityCard)
         }
         return items
@@ -348,6 +349,7 @@ public enum SubscriptionAndStatsService {
         demoMode: Bool = false,
         homeByHost: [HostID: String] = [:]
     ) -> TotalAnalyticsSnapshot {
+        let uniqueSessions = SessionDeduplicator.deduplicate(sessions)
         let dayCutoff = Calendar.current.startOfDay(for: Date())
         var todayUsage = TokenUsage()
         var todaySessionCount = 0
@@ -371,7 +373,7 @@ public enum SubscriptionAndStatsService {
         var modelBuckets: [String: (provider: String?, count: Int, usage: TokenUsage)] = [:]
         var projBuckets: [String: (name: String, abbr: String, hostTitle: String, count: Int, tok: Int, cost: Double)] = [:]
 
-        for s in sessions {
+        for s in uniqueSessions {
             let sCost = PricingCatalog.estimatedCostUSD(usage: s.usage, model: s.model) ?? 0
             let rule = PricingCatalog.rule(for: s.model)
             if let rule, s.usage.cacheRead > 0 {
@@ -487,7 +489,7 @@ public enum SubscriptionAndStatsService {
             todayTurnCount: todayTurnCount,
             todayCostUSD: todayCost,
             allUsage: allUsage,
-            allSessionCount: sessions.count,
+            allSessionCount: uniqueSessions.count,
             allTurnCount: allTurnCount,
             allCostUSD: allCost,
             estimatedCacheSavingsUSD: cacheSavings,

@@ -668,3 +668,101 @@ public struct MenuBarCounts: Equatable, Sendable {
         failed + awaitingApproval + completedUnseen + activeGenerating
     }
 }
+
+public enum SessionDeduplicator {
+    /// Deduplicates sessions by `session.id`, preserving the newest shard's live status and overview
+    /// while backfilling earliest `startedAt`, thread-cumulative `usage`, and per-shard counts when
+    /// distinct rollout/transcript shard files share the same session ID.
+    public static func deduplicate(_ sessions: [AgentSession]) -> [AgentSession] {
+        guard sessions.count > 1 else { return sessions }
+        var indexByID: [String: Int] = [:]
+        indexByID.reserveCapacity(sessions.count)
+        var merged: [AgentSession] = []
+        merged.reserveCapacity(sessions.count)
+
+        for candidate in sessions {
+            if let existingIdx = indexByID[candidate.id] {
+                merged[existingIdx] = merge(merged[existingIdx], candidate)
+            } else {
+                indexByID[candidate.id] = merged.count
+                merged.append(candidate)
+            }
+        }
+        return merged
+    }
+
+    public static func merge(_ lhs: AgentSession, _ rhs: AgentSession) -> AgentSession {
+        let newer: AgentSession
+        let older: AgentSession
+        if lhs.lastActivityAt != rhs.lastActivityAt {
+            if lhs.lastActivityAt > rhs.lastActivityAt {
+                newer = lhs
+                older = rhs
+            } else {
+                newer = rhs
+                older = lhs
+            }
+        } else if lhs.usage.totalTokens >= rhs.usage.totalTokens {
+            newer = lhs
+            older = rhs
+        } else {
+            newer = rhs
+            older = lhs
+        }
+
+        var out = newer
+        out.startedAt = min(newer.startedAt, older.startedAt)
+        out.lastActivityAt = max(newer.lastActivityAt, older.lastActivityAt)
+        out.isSeen = newer.isSeen || older.isSeen
+
+        if isGenericFallbackTitle(newer.title) && !isGenericFallbackTitle(older.title) && !older.title.isEmpty {
+            out.title = older.title
+        }
+        if out.overview == "等待你的下一条消息" && older.overview != "等待你的下一条消息" && !older.overview.isEmpty {
+            out.overview = older.overview
+        }
+
+        // Codex rollout shards record thread-cumulative `total_token_usage`; never sum shards.
+        if older.usage.totalTokens > newer.usage.totalTokens {
+            out.usage = older.usage
+        }
+
+        if out.cwd == nil { out.cwd = older.cwd }
+        if out.groupDirectory == nil { out.groupDirectory = older.groupDirectory }
+        if out.model == nil { out.model = older.model }
+        if out.reasoningEffort == nil { out.reasoningEffort = older.reasoningEffort }
+        if out.contextUsedTokens == nil { out.contextUsedTokens = older.contextUsedTokens }
+        if out.contextWindow == nil { out.contextWindow = older.contextWindow }
+        if out.lastOutputMarkdown == nil { out.lastOutputMarkdown = older.lastOutputMarkdown }
+        if out.outputTokensPerSecond == nil { out.outputTokensPerSecond = older.outputTokensPerSecond }
+        if out.process == nil { out.process = older.process }
+        if out.pendingApproval == nil { out.pendingApproval = older.pendingApproval }
+
+        let isDistinctShardFile: Bool = {
+            guard let p1 = newer.sourceFilePath, let p2 = older.sourceFilePath, !p1.isEmpty, !p2.isEmpty else {
+                return false
+            }
+            return p1 != p2
+        }()
+
+        if isDistinctShardFile {
+            out.turnCount = newer.turnCount + older.turnCount
+            out.totalToolCalls = newer.totalToolCalls + older.totalToolCalls
+            out.successfulToolCalls = newer.successfulToolCalls + older.successfulToolCalls
+            out.compactCount = newer.compactCount + older.compactCount
+
+            var seenToolIDs = Set(newer.recentTools.map(\.id))
+            var combinedTools = newer.recentTools
+            for tool in older.recentTools where seenToolIDs.insert(tool.id).inserted {
+                combinedTools.append(tool)
+            }
+            out.recentTools = Array(combinedTools.prefix(5))
+        }
+
+        return out
+    }
+
+    private static func isGenericFallbackTitle(_ title: String) -> Bool {
+        title.hasSuffix(" 会话") || title == "Codex 会话" || title == "Claude 会话"
+    }
+}

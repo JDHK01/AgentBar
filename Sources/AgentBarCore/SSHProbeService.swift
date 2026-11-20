@@ -288,7 +288,13 @@ public enum SSHProbeService {
         return []
     }
 
-    public static let posixProbeScript: String = #"""
+    public static var posixProbeScript: String {
+        buildPosixProbeScript(includeSubagents: false)
+    }
+
+    public static func buildPosixProbeScript(includeSubagents: Bool = false) -> String {
+        let subFlag = includeSubagents ? "1" : "0"
+        return "include_subagents=\(subFlag)\n" + #"""
 printf "@@HOME %s\n" "$HOME"
 now_ts=$(date +%s 2>/dev/null || echo 0)
 
@@ -297,29 +303,40 @@ list_recent_files() {
   pat="$2"
   limit="$3"
   [ -d "$root" ] || return 0
-  find "$root" -name "$pat" -type f ! -path '*/subagents/*' -exec ls -1t {} + 2>/dev/null | head -n "$limit"
+  if [ "$include_subagents" = "1" ]; then
+    find "$root" -name "$pat" -type f -exec ls -1t {} + 2>/dev/null | head -n "$limit"
+  else
+    find "$root" -name "$pat" -type f ! -path '*/subagents/*' -exec ls -1t {} + 2>/dev/null | head -n "$limit"
+  fi
 }
 
 if [ -d "$HOME/.claude/projects" ]; then
-  list_recent_files "$HOME/.claude/projects" '*.jsonl' 12 | while IFS= read -r f; do
+  list_recent_files "$HOME/.claude/projects" '*.jsonl' 20 | while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
     mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now_ts")
-    sub_dir="${f%.jsonl}/subagents"
-    if [ -d "$sub_dir" ]; then
-      sub_f=$(find "$sub_dir" -name '*.jsonl' -type f -exec ls -1t {} + 2>/dev/null | head -n 1)
-      if [ -n "$sub_f" ]; then
-        sub_mt=$(stat -c %Y "$sub_f" 2>/dev/null || stat -f %m "$sub_f" 2>/dev/null || echo 0)
-        if [ "$sub_mt" -gt "$mt" ] 2>/dev/null; then
-          mt="$sub_mt"
+    if [ "$include_subagents" = "0" ]; then
+      sub_dir="${f%.jsonl}/subagents"
+      if [ -d "$sub_dir" ]; then
+        sub_f=$(find "$sub_dir" -name '*.jsonl' -type f -exec ls -1t {} + 2>/dev/null | head -n 1)
+        if [ -n "$sub_f" ]; then
+          sub_mt=$(stat -c %Y "$sub_f" 2>/dev/null || stat -f %m "$sub_f" 2>/dev/null || echo 0)
+          if [ "$sub_mt" -gt "$mt" ] 2>/dev/null; then
+            mt="$sub_mt"
+          fi
         fi
       fi
     fi
     printf "@@BEGIN claude %s %s\n" "$mt" "$f"
-    head -n 15 "$f" 2>/dev/null
-    printf "\n"
-    grep -E '"type":"(ai-title|custom-title)"' "$f" 2>/dev/null | tail -n 3
-    printf "\n"
-    tail -c 160000 "$f" 2>/dev/null
+    sz=$(wc -c < "$f" 2>/dev/null || echo 0)
+    if [ "$sz" -le 170000 ] 2>/dev/null; then
+      cat "$f" 2>/dev/null
+    else
+      head -n 15 "$f" 2>/dev/null
+      printf "\n"
+      grep -E '"type":"(ai-title|custom-title)"' "$f" 2>/dev/null | tail -n 3
+      printf "\n"
+      tail -c 160000 "$f" 2>/dev/null
+    fi
     printf "\n@@END\n"
   done
 fi
@@ -331,13 +348,27 @@ if [ -f "$HOME/.codex/session_index.jsonl" ]; then
 fi
 
 if [ -d "$HOME/.codex/sessions" ]; then
-  list_recent_files "$HOME/.codex/sessions" 'rollout-*.jsonl' 12 | while IFS= read -r f; do
+  codex_emitted=0
+  list_recent_files "$HOME/.codex/sessions" 'rollout-*.jsonl' 45 | while IFS= read -r f; do
     [ -n "$f" ] && [ -f "$f" ] || continue
+    [ "$codex_emitted" -lt 24 ] || break
+    if [ "$include_subagents" = "0" ]; then
+      first_line=$(head -n 1 "$f" 2>/dev/null || true)
+      if printf "%s" "$first_line" | grep -q '"subagent"' 2>/dev/null; then
+        continue
+      fi
+    fi
+    codex_emitted=$((codex_emitted + 1))
     mt=$(stat -c %Y "$f" 2>/dev/null || stat -f %m "$f" 2>/dev/null || echo "$now_ts")
     printf "@@BEGIN codex %s %s\n" "$mt" "$f"
-    head -n 10 "$f" 2>/dev/null
-    printf "\n"
-    tail -c 160000 "$f" 2>/dev/null
+    sz=$(wc -c < "$f" 2>/dev/null || echo 0)
+    if [ "$sz" -le 170000 ] 2>/dev/null; then
+      cat "$f" 2>/dev/null
+    else
+      head -n 10 "$f" 2>/dev/null
+      printf "\n"
+      tail -c 160000 "$f" 2>/dev/null
+    fi
     printf "\n@@END\n"
   done
 fi
@@ -372,15 +403,17 @@ if [ -d "$HOME/.agentbar/pending" ]; then
   done
 fi
 """#
+    }
 
     public static func probeHost(
         alias: String,
         lookbackHours: Double = 168,
+        includeSubagents: Bool = false,
         seenSessionIDs: Set<String> = []
     ) async -> SSHProbeResult {
         let hostID = HostID.ssh(alias: alias)
         HookApprovalManager.ensureDirectories()
-        let scriptB64 = Data(posixProbeScript.utf8).base64EncodedString()
+        let scriptB64 = Data(buildPosixProbeScript(includeSubagents: includeSubagents).utf8).base64EncodedString()
         let remoteCmd = "printf '%s' '\(scriptB64)' | (base64 -d 2>/dev/null || base64 -D) | sh"
         let start = Date()
 
@@ -427,6 +460,7 @@ fi
             stdout: runResult.stdout,
             host: hostID,
             lookbackHours: lookbackHours,
+            includeSubagents: includeSubagents,
             seenSessionIDs: seenSessionIDs
         )
         return SSHProbeResult(
@@ -473,11 +507,12 @@ fi
         }
     }
 
-    private static func parseProbeOutput(
+    public static func parseProbeOutput(
         stdout: String,
         host: HostID,
-        lookbackHours: Double,
-        seenSessionIDs: Set<String>
+        lookbackHours: Double = 168,
+        includeSubagents: Bool = false,
+        seenSessionIDs: Set<String> = []
     ) -> (remoteHome: String?, sessions: [AgentSession], pendingApprovals: [PendingApproval]) {
         var remoteHome: String?
         var codexTitles: [String: String] = [:]
@@ -545,6 +580,7 @@ fi
                     filePath: b.path,
                     fileModificationDate: b.mtime,
                     host: host,
+                    includeSubagents: includeSubagents,
                     seenSessionIDs: seenSessionIDs
                 ) {
                     sessions.append(s)
@@ -557,6 +593,7 @@ fi
                     fileModificationDate: b.mtime,
                     host: host,
                     threadTitles: codexTitles,
+                    includeSubagents: includeSubagents,
                     seenSessionIDs: seenSessionIDs
                 ) {
                     sessions.append(s)
@@ -591,6 +628,7 @@ fi
             }
         }
 
+        sessions = SessionDeduplicator.deduplicate(sessions)
         if !remoteProcesses.isEmpty {
             attachAndSynthesizeRemoteProcesses(remoteProcesses, into: &sessions, host: host)
         }

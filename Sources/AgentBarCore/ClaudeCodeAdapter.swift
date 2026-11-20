@@ -44,8 +44,12 @@ public enum ClaudeCodeAdapter {
             includeSubagents: includeSubagents
         )
 
-        var results: [AgentSession] = []
-        for item in candidates.prefix(35) {
+        let maxUniqueSessions = 35
+        let maxCandidateScan = 200
+        var parsedSessions: [AgentSession] = []
+        var acceptedIDs: Set<String> = []
+
+        for item in candidates.prefix(maxCandidateScan) {
             guard let content = try? String(contentsOf: item.url, encoding: .utf8) else { continue }
             let rawID = item.url.deletingPathExtension().lastPathComponent
             if var session = parseTranscript(
@@ -55,13 +59,18 @@ public enum ClaudeCodeAdapter {
                 fileModificationDate: item.mtime,
                 host: .local,
                 defaultProvider: provider,
+                includeSubagents: includeSubagents,
                 seenSessionIDs: seenSessionIDs
             ) {
+                if !acceptedIDs.contains(session.id) {
+                    guard acceptedIDs.count < maxUniqueSessions else { continue }
+                    acceptedIDs.insert(session.id)
+                }
                 session.groupDirectory = await GitRootResolver.shared.resolveGroupDirectory(for: session.cwd)
-                results.append(session)
+                parsedSessions.append(session)
             }
         }
-        return results
+        return SessionDeduplicator.deduplicate(parsedSessions)
     }
 
     public static func collectRecentJSONLFiles(
@@ -116,9 +125,13 @@ public enum ClaudeCodeAdapter {
         fileModificationDate: Date,
         host: HostID,
         defaultProvider: String = "Anthropic",
+        includeSubagents: Bool = false,
         seenSessionIDs: Set<String> = []
     ) -> AgentSession? {
         var rawSessionID = fallbackSessionID
+        var agentID: String?
+        var sawSidechain = false
+        var sawNonSidechain = false
         var aiTitle: String?
         var customTitle: String?
         var firstUserPrompt: String?
@@ -150,6 +163,16 @@ public enum ClaudeCodeAdapter {
             }
             if let sid = obj["sessionId"] as? String, !sid.isEmpty {
                 rawSessionID = sid
+            }
+            if let aid = obj["agentId"] as? String, !aid.isEmpty {
+                agentID = aid
+            }
+            if let sidechain = obj["isSidechain"] as? Bool {
+                if sidechain {
+                    sawSidechain = true
+                } else {
+                    sawNonSidechain = true
+                }
             }
             if let dir = obj["cwd"] as? String, !dir.isEmpty {
                 cwd = dir
@@ -312,6 +335,12 @@ public enum ClaudeCodeAdapter {
             }
         }
 
+        let pathIsSubagent = filePath?.contains("/subagents/") == true
+        let isSubagent = pathIsSubagent || agentID != nil || (sawSidechain && !sawNonSidechain)
+        if isSubagent && !includeSubagents {
+            return nil
+        }
+
         let hasRealActivity = turnCount > 0
             || !usageByMessageID.isEmpty
             || anonymousUsage.totalTokens > 0
@@ -344,7 +373,13 @@ public enum ClaudeCodeAdapter {
         }
         let recentTail = Array(recent.suffix(5).reversed())
 
-        let sessionID = "\(host.storageKey):claude:\(rawSessionID)"
+        let sessionID: String
+        if isSubagent {
+            let subagentKey = agentID ?? fallbackSessionID
+            sessionID = "\(host.storageKey):claude:\(rawSessionID):\(subagentKey)"
+        } else {
+            sessionID = "\(host.storageKey):claude:\(rawSessionID)"
+        }
         let isSeen = seenSessionIDs.contains(sessionID)
         let ageSeconds = Date().timeIntervalSince(lastActivityAt)
 

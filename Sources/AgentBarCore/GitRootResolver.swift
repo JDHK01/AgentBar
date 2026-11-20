@@ -88,8 +88,9 @@ public enum SessionGroupingBuilder {
         pinnedGroupIDs: Set<String> = [],
         customHostOrder: [String] = []
     ) -> [HostSessionGroup] {
+        let uniqueSessions = SessionDeduplicator.deduplicate(sessions)
         var byHost: [HostID: [AgentSession]] = [:]
-        for session in sessions {
+        for session in uniqueSessions {
             byHost[session.host, default: []].append(session)
         }
         for host in hostStates.keys where byHost[host] == nil {
@@ -240,8 +241,9 @@ public enum SessionGroupingBuilder {
     }
 
     public static func computeMenuBarCounts(sessions: [AgentSession]) -> MenuBarCounts {
+        let uniqueSessions = SessionDeduplicator.deduplicate(sessions)
         var counts = MenuBarCounts()
-        for s in sessions {
+        for s in uniqueSessions {
             if s.kind.isChatOnly { continue }
             switch s.status {
             case .failed:

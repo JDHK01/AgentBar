@@ -219,7 +219,8 @@ final class AppModel {
 
     var todaySummaryText: String {
         let dayCutoff = Calendar.current.startOfDay(for: Date())
-        let recent = sessions.filter { $0.lastActivityAt >= dayCutoff || demoModeEnabled }
+        let uniqueSessions = SessionDeduplicator.deduplicate(sessions)
+        let recent = uniqueSessions.filter { $0.lastActivityAt >= dayCutoff || demoModeEnabled }
         var totalTok = 0
         var totalPrompt = 0
         var totalCacheRead = 0
@@ -543,7 +544,7 @@ final class AppModel {
         async let antigravityList = AntigravityAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
 
         let antigravity = await antigravityList
-        var local = await (claudeList + codexList + dshList + cursorList) + antigravity
+        var local = SessionDeduplicator.deduplicate(await (claudeList + codexList + dshList + cursorList) + antigravity)
         let procs = await Task.detached(priority: .utility) {
             ProcessAndChatScanner.scanLocalAgentProcesses()
         }.value
@@ -556,7 +557,7 @@ final class AppModel {
         mergePendingApprovals(pendingApprovals, into: &local, host: .local)
 
         let remoteExisting = sessions.filter { !$0.host.isLocal }
-        self.sessions = local + remoteExisting
+        self.sessions = SessionDeduplicator.deduplicate(local + remoteExisting)
         self.hostStates[.local] = HostConnectionState(host: .local, isOnline: true)
         updateSubscriptionCards()
         notifyStatusBar()
@@ -594,6 +595,7 @@ final class AppModel {
 
         let seen = seenSessionIDs
         let remoteLookback = max(lookbackHours, 168)
+        let subagents = includeSubagents
 
         await withTaskGroup(of: (SSHHostConfig, SSHProbeResult).self) { group in
             for cfg in enabledHosts {
@@ -601,6 +603,7 @@ final class AppModel {
                     let res = await SSHProbeService.probeHost(
                         alias: cfg.alias,
                         lookbackHours: remoteLookback,
+                        includeSubagents: subagents,
                         seenSessionIDs: seen
                     )
                     return (cfg, res)
@@ -620,6 +623,7 @@ final class AppModel {
                     }
                     sessions.removeAll { $0.host == hostID }
                     sessions.append(contentsOf: remoteList)
+                    sessions = SessionDeduplicator.deduplicate(sessions)
                 }
                 notifyStatusBar()
             }
@@ -655,6 +659,7 @@ final class AppModel {
         let res = await SSHProbeService.probeHost(
             alias: alias,
             lookbackHours: max(lookbackHours, 168),
+            includeSubagents: includeSubagents,
             seenSessionIDs: seenSessionIDs
         )
         probingHostIDs.remove(hostID)
@@ -669,6 +674,7 @@ final class AppModel {
             }
             sessions.removeAll { $0.host == hostID }
             sessions.append(contentsOf: remoteList)
+            sessions = SessionDeduplicator.deduplicate(sessions)
         }
         notifyStatusBar()
     }

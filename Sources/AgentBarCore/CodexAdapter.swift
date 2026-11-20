@@ -61,8 +61,12 @@ public enum CodexAdapter {
         let cutoff = Date().addingTimeInterval(-lookbackHours * 3600)
         let candidates = ClaudeCodeAdapter.collectRecentJSONLFiles(rootPath: sessionsRoot, cutoff: cutoff)
 
-        var results: [AgentSession] = []
-        for item in candidates.prefix(35) {
+        let maxUniqueSessions = 35
+        let maxCandidateScan = 250
+        var parsedSessions: [AgentSession] = []
+        var acceptedIDs: Set<String> = []
+
+        for item in candidates.prefix(maxCandidateScan) {
             guard let content = readTailUTF8(url: item.url, maxBytes: 2_500_000) else { continue }
             if var session = parseRollout(
                 jsonl: content,
@@ -74,11 +78,15 @@ public enum CodexAdapter {
                 includeSubagents: includeSubagents,
                 seenSessionIDs: seenSessionIDs
             ) {
+                if !acceptedIDs.contains(session.id) {
+                    guard acceptedIDs.count < maxUniqueSessions else { continue }
+                    acceptedIDs.insert(session.id)
+                }
                 session.groupDirectory = await GitRootResolver.shared.resolveGroupDirectory(for: session.cwd)
-                results.append(session)
+                parsedSessions.append(session)
             }
         }
-        return results
+        return SessionDeduplicator.deduplicate(parsedSessions)
     }
 
     private static func readTailUTF8(url: URL, maxBytes: Int) -> String? {
@@ -108,7 +116,7 @@ public enum CodexAdapter {
     ) -> AgentSession? {
         var rawID = URL(fileURLWithPath: filePath ?? "codex").deletingPathExtension().lastPathComponent
         if let uuidRange = rawID.range(
-            of: #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#,
+            of: #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"#,
             options: .regularExpression
         ) {
             rawID = String(rawID[uuidRange])
@@ -199,6 +207,9 @@ public enum CodexAdapter {
                 if let eff = payload["effort"] as? String, !eff.isEmpty {
                     reasoningEffort = eff
                 }
+
+            case "compacted":
+                compactCount += 1
 
             case "event_msg":
                 guard let payload else { continue }
@@ -325,8 +336,16 @@ public enum CodexAdapter {
             }
         }
 
+        let hasRealActivity = turnOpen
+            || !openTools.isEmpty
+            || totalTools > 0
+            || lastAssistantMessage != nil
+            || usage.totalTokens > 0
+
         let title = threadTitles[rawID]
             ?? firstUserMessage.map { ClaudeCodeAdapter.firstSingleLine($0, maxLength: 44) }
+            ?? (hasRealActivity ? cwd.map { "\(URL(fileURLWithPath: $0).lastPathComponent) 会话" } : nil)
+            ?? (hasRealActivity ? "Codex 会话" : nil)
 
         guard let title, !title.isEmpty else {
             return nil
