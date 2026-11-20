@@ -8,7 +8,9 @@ public enum DemoData {
         subscriptions: [SubscriptionCardItem]
     ) {
         let now = Date()
-        let home = NSHomeDirectory()
+        let home = ProcessInfo.processInfo.environment["AGENTBAR_GENERIC_HOSTNAME"] == "1"
+            ? "/Users/dev"
+            : NSHomeDirectory()
         let sshGPU = HostID.ssh(alias: "gpu-dev-01")
         let sshBuild = HostID.ssh(alias: "build-mac")
 
@@ -259,12 +261,13 @@ public enum DemoData {
         let balances: [BalanceReading] = [
             BalanceReading(
                 sourceID: UUID(uuidString: "00000000-0000-0000-0000-000000000001")!,
-                name: "内部 SSO Dashboard",
-                formattedValue: "$1,284.50",
+                name: "Team AI Dashboard",
+                formattedValue: "$128.40 / $300.00",
                 numericValue: 1284.50,
-                usedFraction: 0.62,
-                footnote: "本月已用 62% · 2 分钟前",
-                isLow: false
+                usedFraction: 0.43,
+                footnote: "SSO 自动同步 · 本月额度",
+                isLow: false,
+                updatedAt: now.addingTimeInterval(-120)
             ),
             BalanceReading(
                 sourceID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
@@ -273,7 +276,8 @@ public enum DemoData {
                 numericValue: 86.20,
                 usedFraction: 0.86,
                 footnote: "低于阈值 ¥100",
-                isLow: true
+                isLow: true,
+                updatedAt: now.addingTimeInterval(-45)
             ),
             BalanceReading(
                 sourceID: UUID(uuidString: "00000000-0000-0000-0000-000000000003")!,
@@ -281,8 +285,9 @@ public enum DemoData {
                 formattedValue: "¥312.40",
                 numericValue: 312.40,
                 usedFraction: 0.35,
-                footnote: "自定义命令 · 15 分钟前",
-                isLow: false
+                footnote: "自定义脚本同步",
+                isLow: false,
+                updatedAt: now.addingTimeInterval(-300)
             )
         ]
 
