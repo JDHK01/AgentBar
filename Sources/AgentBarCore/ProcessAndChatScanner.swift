@@ -37,6 +37,7 @@ public enum ProcessAndChatScanner {
                 || lower.contains("codex")
                 || lower.contains("cursor")
                 || lower.contains("trae")
+                || isAntigravityDesktopProcess(lower)
                 || lower.contains("deepseek")
                 || lower.contains("doubao")
                 || lower.contains("dsh") else {
@@ -101,6 +102,8 @@ public enum ProcessAndChatScanner {
                     return cmd.contains("cursor.app/contents/macos/cursor")
                 case .trae:
                     return cmd.contains("trae")
+                case .antigravity:
+                    return isAntigravityDesktopProcess(cmd)
                 case .doubao:
                     return cmd.contains("doubao")
                 case .deepseekChat:
@@ -118,6 +121,10 @@ public enum ProcessAndChatScanner {
                 sessions[idx].process = best
             }
         }
+    }
+
+    private static func isAntigravityDesktopProcess(_ command: String) -> Bool {
+        command == "antigravity" || command.hasSuffix("/antigravity.app/contents/macos/antigravity")
     }
 
     @MainActor

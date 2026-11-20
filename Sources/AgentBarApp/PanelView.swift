@@ -563,7 +563,7 @@ struct PanelView: View {
                 .controlSize(.small)
                 .buttonStyle(.glass)
             } else {
-                Text("在终端或桌面启动 Claude Code、Codex、DeepSeek Harness 或 Cursor 后会自动显示在这里。")
+                Text("在终端或桌面启动 Claude Code、Codex、DeepSeek Harness、Cursor 或 Antigravity 后会自动显示在这里。")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.center)

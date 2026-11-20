@@ -116,7 +116,27 @@ public enum SubscriptionAndStatsService {
         if let dshCard = detectDeepSeekSubscription(homeDirectory: homeDirectory, todaySessions: todaySessions) {
             items.append(dshCard)
         }
+        if let antigravityCard = detectAntigravityCard(sessions: sessions) {
+            items.append(antigravityCard)
+        }
         return items
+    }
+
+    private static func detectAntigravityCard(sessions: [AgentSession]) -> SubscriptionCardItem? {
+        let kind = AgentKind.antigravity
+        let localSessions = sessions.filter { $0.host.isLocal && $0.kind == kind }
+        let isInstalled = kind.fallbackAppPaths.contains { FileManager.default.fileExists(atPath: $0) }
+        guard isInstalled || !localSessions.isEmpty else { return nil }
+
+        let recentCount = localSessions.count { $0.status != .runningProcessOnly }
+        let status = recentCount > 0 ? "\(recentCount) 个近期会话" : "暂无近期会话摘要"
+        return SubscriptionCardItem(
+            id: "sub:antigravity",
+            kind: kind,
+            providerTitle: "Google · Antigravity",
+            planBadge: "本机",
+            subtitle: "\(status) · 暂无额度数据"
+        )
     }
 
     private static func detectCodexSubscription(
