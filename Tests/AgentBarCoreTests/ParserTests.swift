@@ -154,4 +154,101 @@ final class ParserTests: XCTestCase {
         XCTAssertEqual(analytics.allUsage.totalTokens, 21_000)
         XCTAssertEqual(analytics.todayUsage.totalTokens, 21_000)
     }
+
+    func testLargeTruncatedCodexRolloutPreservesRunningAndCompletedStatus() async throws {
+        let fm = FileManager.default
+        let tempHome = fm.temporaryDirectory.appendingPathComponent("agentbar-test-codex-large-\(UUID().uuidString)")
+        let codexDir = tempHome.appendingPathComponent(".codex")
+        let dayDir = codexDir.appendingPathComponent("sessions/2026/11/20")
+        try fm.createDirectory(at: dayDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tempHome) }
+
+        let sessionID = "01a1f828-0000-7000-8000-000000000001"
+        let rolloutURL = dayDir.appendingPathComponent("rollout-2026-11-20T16-52-31-\(sessionID).jsonl")
+        let indexURL = codexDir.appendingPathComponent("session_index.jsonl")
+        let globalStateURL = codexDir.appendingPathComponent(".codex-global-state.json")
+
+        let indexLine = """
+        {"id":"\(sessionID)","thread_name":"大型工程重构长任务"}
+        """
+        try Data(indexLine.utf8).write(to: indexURL)
+
+        let globalStateJSON = """
+        {"electron-thread-read-state-v1":{"unreadByIdentity":{"user":{"local":[]}}}}
+        """
+        try Data(globalStateJSON.utf8).write(to: globalStateURL)
+
+        let now = Date()
+        let startTS = now.addingTimeInterval(-3600)
+        let recentTS = now.addingTimeInterval(-5)
+        let iso = ISO8601DateFormatter()
+
+        var lines: [String] = [
+            #"{"timestamp":"\#(iso.string(from: startTS))","type":"session_meta","payload":{"id":"\#(sessionID)","session_id":"\#(sessionID)","cwd":"/tmp/refactor-proj","originator":"Codex Desktop","source":"vscode","model_provider":"openai"}}"#,
+            #"{"timestamp":"\#(iso.string(from: startTS.addingTimeInterval(1)))","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-1","model_context_window":996147}}"#
+        ]
+
+        let fillerChunk = String(repeating: "x", count: 28_000) + #" \"type\":\"task_complete\" "#
+        for idx in 0..<100 {
+            let callID = "call_fill_\(idx)"
+            let stepTS = iso.string(from: startTS.addingTimeInterval(Double(idx + 2)))
+            lines.append(#"{"timestamp":"\#(stepTS)","type":"response_item","payload":{"type":"function_call","status":"completed","name":"exec_command","arguments":"{\"cmd\":\"echo test\"}","call_id":"\#(callID)"}}"#)
+            lines.append(#"{"timestamp":"\#(stepTS)","type":"response_item","payload":{"type":"function_call_output","call_id":"\#(callID)","output":"\#(fillerChunk)"}}"#)
+        }
+
+        lines.append(#"{"timestamp":"\#(iso.string(from: recentTS.addingTimeInterval(-2)))","type":"compacted","payload":{"window_number":4,"resume_metadata":{"previous_turn_settings":{"model":"gpt-5.4"}}}}"#)
+        lines.append(#"{"timestamp":"\#(iso.string(from: recentTS.addingTimeInterval(-1)))","type":"response_item","payload":{"type":"function_call","status":"completed","name":"exec_command","arguments":"{\"cmd\":\"swift test\"}","call_id":"call_tail"}}"#)
+        lines.append(#"{"timestamp":"\#(iso.string(from: recentTS))","type":"response_item","payload":{"type":"function_call_output","call_id":"call_tail","output":"Process exited with code 0"}}"#)
+        lines.append(#"{"timestamp":"\#(iso.string(from: recentTS))","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":36763978,"cached_input_tokens":34992247,"cache_write_input_tokens":0,"output_tokens":279532,"reasoning_output_tokens":0,"total_tokens":37043510},"last_token_usage":{"input_tokens":163811,"cached_input_tokens":159016,"output_tokens":101,"total_tokens":163912},"model_context_window":996147}}}"#)
+
+        let activePayload = Data((lines.joined(separator: "\n") + "\n").utf8)
+        XCTAssertGreaterThan(activePayload.count, 2_600_000)
+        try activePayload.write(to: rolloutURL)
+        try fm.setAttributes([.modificationDate: recentTS], ofItemAtPath: rolloutURL.path)
+
+        let activeLoaded = await CodexAdapter.loadLocalSessions(homeDirectory: tempHome.path, lookbackHours: 24)
+        let activeSession = try XCTUnwrap(activeLoaded.first)
+        XCTAssertEqual(activeSession.status, .generating)
+        XCTAssertEqual(activeSession.model, "gpt-5.4")
+        XCTAssertEqual(activeSession.usage.totalTokens, 37_043_510)
+
+        var finishedLines = lines
+        finishedLines.append(#"{"timestamp":"\#(iso.string(from: now))","type":"response_item","payload":{"type":"message","role":"assistant","content":"重构已完成并通过全部测试。"}}"#)
+        finishedLines.append(#"{"timestamp":"\#(iso.string(from: now))","type":"event_msg","payload":{"type":"task_complete","duration_ms":5000}}"#)
+        try Data((finishedLines.joined(separator: "\n") + "\n").utf8).write(to: rolloutURL)
+        try fm.setAttributes([.modificationDate: now], ofItemAtPath: rolloutURL.path)
+        try fm.setAttributes([.modificationDate: now], ofItemAtPath: globalStateURL.path)
+
+        let finishedLoaded = await CodexAdapter.loadLocalSessions(homeDirectory: tempHome.path, lookbackHours: 24)
+        let finishedSession = try XCTUnwrap(finishedLoaded.first)
+        XCTAssertEqual(finishedSession.status, .waitingForInput)
+    }
+
+    func testTruncatedSSHCodexSnippetInfersGeneratingWithoutTaskStarted() {
+        let now = Date()
+        let tsRecent = Int(now.addingTimeInterval(-8).timeIntervalSince1970)
+        let iso = ISO8601DateFormatter()
+        let sessionID = "01a1f828-0000-7000-8000-000000000002"
+
+        let probeStdout = """
+        @@HOME /home/dev
+        @@BEGIN codex \(tsRecent) /home/dev/.codex/sessions/rollout-2026-11-20-\(sessionID).jsonl
+        {"timestamp":"\(iso.string(from: now.addingTimeInterval(-1200)))","type":"session_meta","payload":{"id":"\(sessionID)","cwd":"/home/dev/repo","originator":"codex_cli_rs"}}
+        {"timestamp":"\(iso.string(from: now.addingTimeInterval(-1199)))","type":"event_msg","payload":{"type":"task_started"}}
+        {"timestamp":"\(iso.string(from: now.addingTimeInterval(-1198)))","type":"response_item","payload":{"type":"message","role":"user","content":"执行全量压测与重构"}}
+        {"timestamp":"\(iso.string(from: now.addingTimeInterval(-1100)))","type":"event_msg","payload":{"type":"task_complete","duration_ms":1000}}
+        {"timestamp":"\(iso.string(from: now.addingTimeInterval(-10)))","type":"response_item","payload":{"type":"reasoning"}}
+        {"timestamp":"\(iso.string(from: now.addingTimeInterval(-8)))","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"pytest\\"}","call_id":"c_ssh"}}
+        {"timestamp":"\(iso.string(from: now.addingTimeInterval(-8)))","type":"response_item","payload":{"type":"function_call_output","call_id":"c_ssh","output":"passed"}}
+        @@END
+        """
+
+        let parsed = SSHProbeService.parseProbeOutput(
+            stdout: probeStdout,
+            host: .ssh(alias: "gpu-box"),
+            lookbackHours: 24
+        )
+        XCTAssertEqual(parsed.sessions.count, 1)
+        XCTAssertEqual(parsed.sessions[0].status, .generating)
+    }
 }

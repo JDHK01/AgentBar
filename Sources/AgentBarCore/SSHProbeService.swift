@@ -367,6 +367,8 @@ if [ -d "$HOME/.codex/sessions" ]; then
     else
       head -n 10 "$f" 2>/dev/null
       printf "\n"
+      grep -E '"type":"event_msg".*"type":"(task_started|task_complete|turn_aborted|error)"' "$f" 2>/dev/null | tail -n 3
+      printf "\n"
       tail -c 160000 "$f" 2>/dev/null
     fi
     printf "\n@@END\n"
