@@ -2,6 +2,8 @@
 
 原生 macOS 液态玻璃（Liquid Glass）菜单栏 AI Agent 监控与一键审批工具。支持实时汇总本机与 SSH 服务器上的 **Codex（桌面版 / CLI）、Claude（桌面版 / Claude Code CLI）、DeepSeek Harness、Cursor、Trae、豆包、DeepSeek 对话** 会话状态、工具调用、Token、上下文窗口、缓存命中率、进程内存，并支持一键审批、一键跳转终端、面板内 Markdown 预览及余额 Dashboard（含 SSO 网页提取）。
 
+AgentBar 可从本机 Antigravity 2.0 的会话摘要库读取近期会话。没有可显示的摘要时，如果 Antigravity 正在运行，会话页会显示应用入口。点击条目可打开或切回 Antigravity。「订阅会员 & Dashboard」会显示 Antigravity 本机卡片和近期会话数。
+
 ## 构建与打包 DMG
 
 ```bash

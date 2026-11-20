@@ -524,12 +524,17 @@ final class AppModel {
         async let codexList = CodexAdapter.loadLocalSessions(lookbackHours: lookback, includeSubagents: subagents, seenSessionIDs: seen)
         async let dshList = DeepSeekHarnessAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
         async let cursorList = CursorTraeAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
+        async let antigravityList = AntigravityAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
 
-        var local = await (claudeList + codexList + dshList + cursorList)
+        let antigravity = await antigravityList
+        var local = await (claudeList + codexList + dshList + cursorList) + antigravity
         let procs = await Task.detached(priority: .utility) {
             ProcessAndChatScanner.scanLocalAgentProcesses()
         }.value
         ProcessAndChatScanner.attachProcesses(to: &local, processes: procs)
+        if antigravity.isEmpty, let appSession = AntigravityAdapter.runningDesktopSession(processes: procs) {
+            local.append(appSession)
+        }
 
         let pendingApprovals = HookApprovalManager.loadLocalPendingApprovals()
         mergePendingApprovals(pendingApprovals, into: &local, host: .local)

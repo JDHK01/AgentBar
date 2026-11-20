@@ -118,7 +118,7 @@ enum JumpService {
             if !openLocalIDEFolder(scheme: "cursor", bundleIDs: session.kind.preferredBundleIdentifiers, cwd: session.cwd) {
                 activateOrLaunchDesktopApp(kind: session.kind, cwd: session.cwd)
             }
-        case .trae, .claudeDesktop, .deepseekChat, .doubao:
+        case .trae, .antigravity, .claudeDesktop, .deepseekChat, .doubao:
             activateOrLaunchDesktopApp(kind: session.kind, cwd: session.cwd)
         case .claudeCode, .codexCLI, .generic:
             jumpToLocalTerminal(session: session)

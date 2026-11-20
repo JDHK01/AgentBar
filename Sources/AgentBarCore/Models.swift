@@ -10,6 +10,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
     case doubao
     case cursor
     case trae
+    case antigravity
     case generic
 
     public var displayName: String {
@@ -23,6 +24,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
         case .doubao: return "豆包"
         case .cursor: return "Cursor"
         case .trae: return "Trae"
+        case .antigravity: return "Antigravity"
         case .generic: return "Agent"
         }
     }
@@ -59,6 +61,8 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
             return ["com.todesktop.230313mzl4w4u92", "com.cursor.Cursor"]
         case .trae:
             return ["com.bytedance.trae", "cn.trae.app", "com.marscode.ide"]
+        case .antigravity:
+            return ["com.google.antigravity"]
         case .generic:
             return ["com.apple.Terminal"]
         }
@@ -78,6 +82,8 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
             return ["/Applications/Cursor.app"]
         case .trae:
             return ["/Applications/Trae.app", "/Applications/Trae CN.app"]
+        case .antigravity:
+            return ["/Applications/Antigravity.app"]
         case .generic:
             return ["/System/Applications/Utilities/Terminal.app"]
         }
@@ -91,6 +97,7 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
         case .doubao: return "豆"
         case .cursor: return "Cu"
         case .trae: return "T"
+        case .antigravity: return "AG"
         case .generic: return ">_"
         }
     }
