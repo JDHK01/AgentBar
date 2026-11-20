@@ -150,6 +150,57 @@ struct AgentBarHookMain {
         precondition(unreadDesktopSession.isSeen == false && unreadDesktopSession.status == .completed)
         precondition(viewedDesktopSession.isSeen == true && viewedDesktopSession.status == .waitingForInput)
 
+        let isoNow = ISO8601DateFormatter()
+        let truncatedActiveSession = CodexAdapter.parseRollout(
+            jsonl: """
+            {"timestamp":"\(isoNow.string(from: now.addingTimeInterval(-3600)))","type":"session_meta","payload":{"id":"\(sharedCodexID)","cwd":"/tmp/proj","originator":"Codex Desktop","source":"vscode"}}
+            {"timestamp":"\(isoNow.string(from: now.addingTimeInterval(-5)))","type":"compacted","payload":{"window_number":2,"resume_metadata":{"previous_turn_settings":{"model":"gpt-5.4"}}}}
+            {"timestamp":"\(isoNow.string(from: now.addingTimeInterval(-4)))","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\\"cmd\\":\\"swift build\\"}","call_id":"c1"}}
+            {"timestamp":"\(isoNow.string(from: now.addingTimeInterval(-4)))","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"ok"}}
+            """,
+            filePath: "/tmp/rollout-truncated-\(sharedCodexID).jsonl",
+            fileModificationDate: now.addingTimeInterval(-4),
+            host: .local,
+            threadTitles: [sharedCodexID: "长任务截断回归"],
+            readState: codexReadWhenViewed
+        )!
+        precondition(truncatedActiveSession.status == .generating && truncatedActiveSession.model == "gpt-5.4")
+
+        let fm = FileManager.default
+        let tmpCodexHome = fm.temporaryDirectory.appendingPathComponent("agentbar-selftest-large-\(UUID().uuidString)")
+        let tmpDayDir = tmpCodexHome.appendingPathComponent(".codex/sessions/2026/11/20")
+        try? fm.createDirectory(at: tmpDayDir, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmpCodexHome) }
+
+        let tmpRolloutURL = tmpDayDir.appendingPathComponent("rollout-2026-11-20T16-52-31-\(sharedCodexID).jsonl")
+        let tmpIndexURL = tmpCodexHome.appendingPathComponent(".codex/session_index.jsonl")
+        let tmpGlobalStateURL = tmpCodexHome.appendingPathComponent(".codex/.codex-global-state.json")
+        try? Data(#"{"id":"\#(sharedCodexID)","thread_name":"超长单轮重构任务"}"#.utf8).write(to: tmpIndexURL)
+        try? Data(#"{"electron-thread-read-state-v1":{"unreadByIdentity":{"u":{"local":[]}}}}"#.utf8).write(to: tmpGlobalStateURL)
+
+        let filler = String(repeating: "a", count: 28_000) + #" \"type\":\"task_complete\" "#
+        var bigLines: [String] = [
+            #"{"timestamp":"\#(isoNow.string(from: now.addingTimeInterval(-3600)))","type":"session_meta","payload":{"id":"\#(sharedCodexID)","cwd":"/tmp/proj","originator":"Codex Desktop","source":"vscode"}}"#,
+            #"{"timestamp":"\#(isoNow.string(from: now.addingTimeInterval(-3599)))","type":"event_msg","payload":{"type":"task_started"}}"#
+        ]
+        for idx in 0..<95 {
+            let stepTS = isoNow.string(from: now.addingTimeInterval(Double(-3500 + idx)))
+            bigLines.append(#"{"timestamp":"\#(stepTS)","type":"response_item","payload":{"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"echo 1\"}","call_id":"fill_\#(idx)"}}"#)
+            bigLines.append(#"{"timestamp":"\#(stepTS)","type":"response_item","payload":{"type":"function_call_output","call_id":"fill_\#(idx)","output":"\#(filler)"}}"#)
+        }
+        bigLines.append(#"{"timestamp":"\#(isoNow.string(from: now.addingTimeInterval(-3)))","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10000,"cached_input_tokens":5000,"cache_write_input_tokens":0,"output_tokens":500,"reasoning_output_tokens":0,"total_tokens":10500}}}}"#)
+        try? Data((bigLines.joined(separator: "\n") + "\n").utf8).write(to: tmpRolloutURL)
+
+        let largeLoaded = await CodexAdapter.loadLocalSessions(homeDirectory: tmpCodexHome.path, lookbackHours: 24)
+        precondition(largeLoaded.first?.status == .generating, "Expected >2.5 MB unclosed rollout to remain .generating")
+
+        bigLines.append(#"{"timestamp":"\#(isoNow.string(from: now))","type":"response_item","payload":{"type":"message","role":"assistant","content":"完成"}}"#)
+        bigLines.append(#"{"timestamp":"\#(isoNow.string(from: now))","type":"event_msg","payload":{"type":"task_complete","duration_ms":1000}}"#)
+        try? Data((bigLines.joined(separator: "\n") + "\n").utf8).write(to: tmpRolloutURL)
+        try? fm.setAttributes([.modificationDate: now], ofItemAtPath: tmpGlobalStateURL.path)
+        let largeFinished = await CodexAdapter.loadLocalSessions(homeDirectory: tmpCodexHome.path, lookbackHours: 24)
+        precondition(largeFinished.first?.status == .waitingForInput, "Expected >2.5 MB completed+viewed rollout to be .waitingForInput")
+
         let subJSONL = """
         {"type":"user","sessionId":"s-1","agentId":"a68596","isSidechain":true,"cwd":"/Users/test/repo","timestamp":"2026-11-19T04:10:00Z","message":{"role":"user","content":"子代理任务"}}
         """

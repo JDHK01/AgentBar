@@ -175,14 +175,81 @@ public enum CodexAdapter {
         if data.count <= maxBytes {
             return String(data: data, encoding: .utf8)
         }
-        // Keep the first 32 KB (for session_meta) + last maxBytes
-        let head = data.prefix(32_768)
-        let tail = data.suffix(maxBytes)
-        let headStr = String(decoding: head, as: UTF8.self)
-        let tailStr = String(decoding: tail, as: UTF8.self)
-        let firstLine = headStr.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
-        let cleanTail = tailStr.drop { $0 != "\n" }
-        return firstLine + "\n" + cleanTail
+        let newline: UInt8 = 0x0A
+        let firstNewline = data.firstIndex(of: newline) ?? data.endIndex
+        let firstLine = String(decoding: data[data.startIndex..<firstNewline], as: UTF8.self)
+        let afterFirstLine = firstNewline < data.endIndex ? data.index(after: firstNewline) : data.endIndex
+
+        let rawTailStart = max(afterFirstLine, data.count - maxBytes)
+        let tailLineStart: Int
+        if let nlInTail = data[rawTailStart..<data.endIndex].firstIndex(of: newline) {
+            tailLineStart = data.index(after: nlInTail)
+        } else {
+            tailLineStart = data.endIndex
+        }
+
+        var segments: [String] = [firstLine]
+        if afterFirstLine < tailLineStart,
+           let lifecycleLine = latestLifecycleEventLine(in: data, range: afterFirstLine..<tailLineStart) {
+            segments.append(lifecycleLine)
+        }
+        if tailLineStart < data.endIndex {
+            segments.append(String(decoding: data[tailLineStart..<data.endIndex], as: UTF8.self))
+        }
+        return segments.joined(separator: "\n")
+    }
+
+    private static let lifecycleNeedles: [Data] = [
+        Data("\"task_started\"".utf8),
+        Data("\"task_complete\"".utf8),
+        Data("\"turn_aborted\"".utf8),
+        Data("\"type\":\"error\"".utf8)
+    ]
+
+    private static let lifecycleEventTypes: Set<String> = [
+        "task_started",
+        "task_complete",
+        "turn_aborted",
+        "error"
+    ]
+
+    private static func latestLifecycleEventLine(in data: Data, range: Range<Int>) -> String? {
+        let newline: UInt8 = 0x0A
+        var bestStart = -1
+        var bestLine: String?
+
+        for needle in lifecycleNeedles {
+            var searchUpper = range.upperBound
+            var attempts = 0
+            while searchUpper > range.lowerBound && attempts < 12 {
+                attempts += 1
+                guard let hit = data.range(of: needle, options: .backwards, in: range.lowerBound..<searchUpper) else {
+                    break
+                }
+                let lineStart: Int
+                if let prevNL = data[range.lowerBound..<hit.lowerBound].lastIndex(of: newline) {
+                    lineStart = prevNL + 1
+                } else {
+                    lineStart = range.lowerBound
+                }
+                if lineStart <= bestStart {
+                    break
+                }
+                let lineEnd = data[hit.upperBound..<range.upperBound].firstIndex(of: newline) ?? range.upperBound
+                let lineData = data[lineStart..<lineEnd]
+                if let obj = (try? JSONSerialization.jsonObject(with: lineData)) as? [String: Any],
+                   (obj["type"] as? String) == "event_msg",
+                   let payload = obj["payload"] as? [String: Any],
+                   let ptype = payload["type"] as? String,
+                   lifecycleEventTypes.contains(ptype) {
+                    bestStart = lineStart
+                    bestLine = String(decoding: lineData, as: UTF8.self)
+                    break
+                }
+                searchUpper = lineStart > range.lowerBound ? (lineStart - 1) : range.lowerBound
+            }
+        }
+        return bestLine
     }
 
     public static func parseRollout(
@@ -227,6 +294,13 @@ public enum CodexAdapter {
         var errorBanner: String?
         var startedAt: Date?
         var lastActivityAt = fileModificationDate
+
+        func markInTurnActivity() {
+            if !turnOpen {
+                turnOpen = true
+                errorBanner = nil
+            }
+        }
 
         for lineSub in jsonl.split(whereSeparator: \.isNewline) {
             guard let data = lineSub.data(using: .utf8),
@@ -279,6 +353,7 @@ public enum CodexAdapter {
                 }
 
             case "turn_context":
+                markInTurnActivity()
                 guard let payload else { continue }
                 if let dir = payload["cwd"] as? String, !dir.isEmpty {
                     cwd = dir
@@ -291,7 +366,15 @@ public enum CodexAdapter {
                 }
 
             case "compacted":
+                markInTurnActivity()
                 compactCount += 1
+                if model == nil,
+                   let resumeMeta = payload?["resume_metadata"] as? [String: Any],
+                   let prevSettings = resumeMeta["previous_turn_settings"] as? [String: Any],
+                   let m = prevSettings["model"] as? String,
+                   !m.isEmpty {
+                    model = m
+                }
 
             case "event_msg":
                 guard let payload else { continue }
@@ -358,9 +441,12 @@ public enum CodexAdapter {
                         }
                     }
                 case "context_compacted":
+                    markInTurnActivity()
                     compactCount += 1
                 case "error", "turn_aborted":
                     turnOpen = false
+                    openTools.removeAll()
+                    openToolOrder.removeAll()
                     if let message = payload["message"] as? String, !message.isEmpty {
                         errorBanner = ClaudeCodeAdapter.firstSingleLine(message, maxLength: 140)
                     }
@@ -372,7 +458,10 @@ public enum CodexAdapter {
                 guard let payload else { continue }
                 let rtype = (payload["type"] as? String) ?? ""
                 switch rtype {
+                case "reasoning":
+                    markInTurnActivity()
                 case "function_call", "custom_tool_call":
+                    markInTurnActivity()
                     let callID = (payload["call_id"] as? String) ?? UUID().uuidString
                     let name = (payload["name"] as? String) ?? "tool"
                     let args = payload["arguments"] ?? payload["input"]
@@ -387,6 +476,7 @@ public enum CodexAdapter {
                     openToolOrder.append(callID)
                     totalTools += 1
                 case "function_call_output", "custom_tool_call_output":
+                    markInTurnActivity()
                     let callID = (payload["call_id"] as? String) ?? ""
                     let outStr = (payload["output"] as? String) ?? ""
                     let isErr = outStr.contains("Process exited with code 1")
