@@ -96,6 +96,16 @@ public enum AgentKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum SessionLaunchEnvironment: String, Codable, Hashable, Sendable {
+    case auto
+    case terminalCLI
+    case codexApp
+    case vscodeExtension
+    case cursorExtension
+    case traeExtension
+    case deepseekHarnessApp
+}
+
 public enum HostID: Hashable, Codable, Sendable {
     case local
     case ssh(alias: String)
@@ -347,6 +357,7 @@ public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
     public var lastOutputMarkdown: String?
     public var errorBanner: String?
     public var sourceFilePath: String?
+    public var launchEnvironment: SessionLaunchEnvironment
     public var startedAt: Date
     public var lastActivityAt: Date
     public var isSeen: Bool
@@ -380,6 +391,7 @@ public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
         lastOutputMarkdown: String? = nil,
         errorBanner: String? = nil,
         sourceFilePath: String? = nil,
+        launchEnvironment: SessionLaunchEnvironment = .auto,
         startedAt: Date = Date(),
         lastActivityAt: Date = Date(),
         isSeen: Bool = false
@@ -412,6 +424,7 @@ public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
         self.lastOutputMarkdown = lastOutputMarkdown
         self.errorBanner = errorBanner
         self.sourceFilePath = sourceFilePath
+        self.launchEnvironment = launchEnvironment
         self.startedAt = startedAt
         self.lastActivityAt = lastActivityAt
         self.isSeen = isSeen

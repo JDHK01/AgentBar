@@ -139,6 +139,7 @@ public enum ClaudeCodeAdapter {
         var lastStopReason: String?
         var lastEventKind = ""
         var errorBanner: String?
+        var sawIDEMarker = false
         var startedAt: Date?
         var lastActivityAt = fileModificationDate
 
@@ -154,6 +155,7 @@ public enum ClaudeCodeAdapter {
                 cwd = dir
             }
             if let attachment = obj["attachment"] as? [String: Any] {
+                sawIDEMarker = true
                 let attType = (attachment["type"] as? String) ?? ""
                 if attType == "environment",
                    let snap = attachment["snapshot"] as? [String: Any],
@@ -215,6 +217,9 @@ public enum ClaudeCodeAdapter {
                             }
                             lastEventKind = "tool_result"
                         } else if ctype == "text", let t = item["text"] as? String {
+                            if t.contains("<ide_") {
+                                sawIDEMarker = true
+                            }
                             let cleaned = cleanUserPrompt(t)
                             if !cleaned.isEmpty {
                                 if firstUserPrompt == nil { firstUserPrompt = cleaned }
@@ -415,6 +420,7 @@ public enum ClaudeCodeAdapter {
             lastOutputMarkdown: lastAssistantText,
             errorBanner: errorBanner,
             sourceFilePath: filePath,
+            launchEnvironment: sawIDEMarker ? .vscodeExtension : .terminalCLI,
             startedAt: startedAt ?? fileModificationDate,
             lastActivityAt: lastActivityAt,
             isSeen: isSeen

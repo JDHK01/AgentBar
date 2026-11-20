@@ -110,6 +110,9 @@ final class StatusBarController: NSObject {
         model.onPreferredHeightChanged = { [weak self] in
             self?.scheduleResizeVisiblePanel()
         }
+        JumpService.onBeforeJump = { [weak self] in
+            self?.closePanel()
+        }
         updateStatusButtonImage()
     }
 

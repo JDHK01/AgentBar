@@ -107,7 +107,14 @@ public enum CodexAdapter {
         seenSessionIDs: Set<String> = []
     ) -> AgentSession? {
         var rawID = URL(fileURLWithPath: filePath ?? "codex").deletingPathExtension().lastPathComponent
+        if let uuidRange = rawID.range(
+            of: #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"#,
+            options: .regularExpression
+        ) {
+            rawID = String(rawID[uuidRange])
+        }
         var kind: AgentKind = .codexCLI
+        var launchEnv: SessionLaunchEnvironment = .terminalCLI
         var cwd: String?
         var provider = defaultProvider
         var model: String?
@@ -153,6 +160,9 @@ public enum CodexAdapter {
                 if let id = payload["id"] as? String, !id.isEmpty {
                     rawID = id
                 }
+                if let sid = payload["session_id"] as? String, !sid.isEmpty {
+                    rawID = sid
+                }
                 if let dir = payload["cwd"] as? String, !dir.isEmpty {
                     cwd = dir
                 }
@@ -164,10 +174,18 @@ public enum CodexAdapter {
                 }
                 let originator = (payload["originator"] as? String) ?? ""
                 let sourceStr = (payload["source"] as? String) ?? ""
-                if originator.localizedCaseInsensitiveContains("desktop") || sourceStr == "vscode" {
+                if originator.localizedCaseInsensitiveContains("desktop") {
                     kind = .codexDesktop
+                    launchEnv = host.isLocal ? .codexApp : .vscodeExtension
+                } else if originator.localizedCaseInsensitiveContains("cursor") {
+                    kind = .codexDesktop
+                    launchEnv = .cursorExtension
+                } else if originator.localizedCaseInsensitiveContains("vscode") || sourceStr == "vscode" {
+                    kind = .codexDesktop
+                    launchEnv = .vscodeExtension
                 } else {
                     kind = .codexCLI
+                    launchEnv = .terminalCLI
                 }
 
             case "turn_context":
@@ -380,6 +398,7 @@ public enum CodexAdapter {
             lastOutputMarkdown: lastAssistantMessage,
             errorBanner: errorBanner,
             sourceFilePath: filePath,
+            launchEnvironment: launchEnv,
             startedAt: startedAt ?? fileModificationDate,
             lastActivityAt: lastActivityAt,
             isSeen: isSeen

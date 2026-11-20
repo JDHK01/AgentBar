@@ -643,6 +643,11 @@ fi
                 return false
             }) {
                 sessions[idx].process = proc
+                if lowerCmd.contains(".cursor-server") || lowerCmd.contains("/cursor/") {
+                    sessions[idx].launchEnvironment = .cursorExtension
+                } else if lowerCmd.contains(".vscode-server") || lowerCmd.contains("/vscode/") {
+                    sessions[idx].launchEnvironment = .vscodeExtension
+                }
                 if proc.cpuPercent >= 1.5 && sessions[idx].status == .waitingForInput {
                     sessions[idx].status = .generating
                     sessions[idx].statusIsInferred = true

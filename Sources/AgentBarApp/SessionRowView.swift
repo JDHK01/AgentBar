@@ -54,19 +54,18 @@ struct SessionRowView: View {
             .frame(maxWidth: .infinity, alignment: .leading)
 
             HStack(spacing: 6) {
-                if session.status == .completed {
-                    Button {
-                        model.markSessionSeen(session.id)
-                        JumpService.jump(to: session)
-                    } label: {
-                        Image(systemName: "arrow.up.right")
-                            .font(.system(size: 11, weight: .semibold))
-                            .frame(width: 22, height: 22)
-                    }
-                    .buttonStyle(.glass)
-                    .buttonBorderShape(.circle)
-                    .help("一键跳转到终端 / 应用")
+                Button {
+                    model.markSessionSeen(session.id)
+                    JumpService.jump(to: session)
+                } label: {
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 10.5, weight: .semibold))
+                        .frame(width: 21, height: 21)
                 }
+                .buttonStyle(.glass)
+                .buttonBorderShape(.circle)
+                .help(jumpButtonTitle)
+
                 StatusPillView(status: session.status, isInferred: session.statusIsInferred)
             }
             .padding(.top, 2)
@@ -75,8 +74,54 @@ struct SessionRowView: View {
         .padding(.vertical, 6)
         .contentShape(Rectangle())
         .onTapGesture {
+            let flags = NSEvent.modifierFlags
+            if flags.contains(.command) || flags.contains(.option) {
+                model.markSessionSeen(session.id)
+                JumpService.jump(to: session)
+                return
+            }
             withAnimation(.spring(duration: 0.22)) {
                 model.toggleSessionExpanded(session)
+            }
+        }
+        .contextMenu {
+            Button(jumpButtonTitle) {
+                model.markSessionSeen(session.id)
+                JumpService.jump(to: session)
+            }
+            if session.host.isLocal, (session.kind == .codexDesktop || session.kind == .codexCLI) {
+                Button("在 Codex 桌面端打开此线程") {
+                    model.markSessionSeen(session.id)
+                    JumpService.openInCodexThread(sessionID: session.rawSessionID)
+                }
+            }
+            if case .ssh(let alias) = session.host {
+                if JumpService.canOpenRemoteIDE() {
+                    Button("在 VS Code Remote-SSH 中打开") {
+                        model.markSessionSeen(session.id)
+                        _ = JumpService.openInRemoteIDE(alias: alias, cwd: session.cwd, preferCursor: false)
+                    }
+                }
+                Button("在终端 SSH 打开并恢复会话") {
+                    model.markSessionSeen(session.id)
+                    JumpService.openSSHInTerminal(
+                        alias: alias,
+                        cwd: session.cwd,
+                        resumeCommand: session.resumeCommand,
+                        autoExecuteResume: true
+                    )
+                }
+            }
+            if let cwd = session.cwd, session.host.isLocal {
+                Button("在 Finder 中显示目录") {
+                    JumpService.openDirectory(cwd)
+                }
+            }
+            if let resume = session.resumeCommand {
+                Divider()
+                Button("复制恢复命令（\(resume)）") {
+                    JumpService.copyToPasteboard(resume)
+                }
             }
         }
     }
@@ -369,7 +414,7 @@ struct SessionRowView: View {
     }
 
     private var detailActionButtons: some View {
-        HStack(spacing: 6) {
+        FlowLayout(horizontalSpacing: 6, verticalSpacing: 6) {
             if session.status == .awaitingApproval, session.pendingApproval?.canRespondViaHook == true {
                 Button("批准一次") {
                     model.requestApprove(session)
@@ -387,16 +432,32 @@ struct SessionRowView: View {
 
             if session.status == .awaitingApproval {
                 Button(jumpButtonTitle) {
+                    model.markSessionSeen(session.id)
                     JumpService.jump(to: session)
                 }
                 .controlSize(.small)
                 .buttonStyle(.glass)
             } else {
                 Button(jumpButtonTitle) {
+                    model.markSessionSeen(session.id)
                     JumpService.jump(to: session)
                 }
                 .controlSize(.small)
                 .buttonStyle(.glassProminent)
+            }
+
+            if case .ssh(let alias) = session.host {
+                Button("终端 SSH 恢复") {
+                    model.markSessionSeen(session.id)
+                    JumpService.openSSHInTerminal(
+                        alias: alias,
+                        cwd: session.cwd,
+                        resumeCommand: session.resumeCommand,
+                        autoExecuteResume: true
+                    )
+                }
+                .controlSize(.small)
+                .buttonStyle(.glass)
             }
 
             if let cwd = session.cwd, session.host.isLocal {
@@ -419,14 +480,30 @@ struct SessionRowView: View {
 
     private var jumpButtonTitle: String {
         switch session.host {
-        case .ssh:
-            return "在终端 SSH 打开"
+        case .ssh(let alias):
+            if session.launchEnvironment == .cursorExtension {
+                return "在 Cursor SSH (\(alias)) 打开"
+            }
+            if session.launchEnvironment == .vscodeExtension && JumpService.canOpenRemoteIDE() {
+                return "在 VS Code SSH (\(alias)) 打开"
+            }
+            return "SSH 跳转到 \(alias)"
         case .local:
+            switch session.launchEnvironment {
+            case .codexApp:
+                return "在 Codex 打开此对话"
+            case .vscodeExtension:
+                return "在 VS Code 打开此窗口"
+            case .cursorExtension:
+                return "在 Cursor 打开此窗口"
+            default:
+                break
+            }
             if session.kind.isCLI {
                 if let tty = session.process?.tty {
                     return "跳转到终端 (\(tty))"
                 }
-                return "跳转到终端"
+                return "在终端恢复此会话"
             }
             return "打开 \(session.kind.displayName)"
         }
