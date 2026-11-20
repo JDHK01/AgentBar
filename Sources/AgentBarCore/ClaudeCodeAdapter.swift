@@ -294,7 +294,10 @@ public enum ClaudeCodeAdapter {
                         if openTools.isEmpty {
                             lastEventKind = "assistant_text"
                         }
-                        if joined.contains("API Error:") || joined.contains("rate_limit_error") || joined.contains("429 Too Many Requests") {
+                        if joined.contains("API Error:")
+                            || joined.contains("rate_limit_error")
+                            || joined.contains("429 Too Many Requests")
+                            || joined.hasPrefix("Request timed out.") {
                             errorBanner = firstSingleLine(joined, maxLength: 140)
                         }
                     }

@@ -203,66 +203,68 @@ struct PanelView: View {
         let counts = model.menuBarCounts
         let hostSummaries = model.allHostSummaries
         return VStack(spacing: 6) {
-            HStack(spacing: 5) {
-                StatusFilterPillView(
-                    category: .running,
-                    count: counts.activeGenerating,
-                    isSelected: model.selectedCategory == .running
-                ) {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        model.toggleStatusCategory(.running)
+            HStack(alignment: .top, spacing: 6) {
+                FlowLayout(horizontalSpacing: 5, verticalSpacing: 5) {
+                    StatusFilterPillView(
+                        category: .running,
+                        count: counts.activeGenerating,
+                        isSelected: model.selectedCategory == .running
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.toggleStatusCategory(.running)
+                        }
                     }
-                }
 
-                StatusFilterPillView(
-                    category: .completedUnseen,
-                    count: counts.completedUnseen,
-                    isSelected: model.selectedCategory == .completedUnseen
-                ) {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        model.toggleStatusCategory(.completedUnseen)
+                    StatusFilterPillView(
+                        category: .completedUnseen,
+                        count: counts.completedUnseen,
+                        isSelected: model.selectedCategory == .completedUnseen
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.toggleStatusCategory(.completedUnseen)
+                        }
                     }
-                }
 
-                StatusFilterPillView(
-                    category: .awaitingApproval,
-                    count: counts.awaitingApproval,
-                    isSelected: model.selectedCategory == .awaitingApproval
-                ) {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        model.toggleStatusCategory(.awaitingApproval)
+                    StatusFilterPillView(
+                        category: .awaitingApproval,
+                        count: counts.awaitingApproval,
+                        isSelected: model.selectedCategory == .awaitingApproval
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.toggleStatusCategory(.awaitingApproval)
+                        }
                     }
-                }
 
-                StatusFilterPillView(
-                    category: .failed,
-                    count: counts.failed,
-                    isSelected: model.selectedCategory == .failed
-                ) {
-                    withAnimation(.easeInOut(duration: 0.16)) {
-                        model.toggleStatusCategory(.failed)
-                    }
-                }
-
-                Spacer(minLength: 4)
-
-                oneClickApproveButton(pendingCount: counts.awaitingApproval)
-            }
-            .padding(.horizontal, 13)
-
-            HStack(spacing: 6) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 5) {
-                        ForEach(hostSummaries, id: \.host.storageKey) { item in
-                            hostQuickChip(item.host, connection: item.connection, count: item.sessionCount)
+                    StatusFilterPillView(
+                        category: .failed,
+                        count: counts.failed,
+                        isSelected: model.selectedCategory == .failed
+                    ) {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.toggleStatusCategory(.failed)
                         }
                     }
                 }
-                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
 
-                Spacer(minLength: 2)
-                sshServersMenuButton
-                sortMenuButton
+                oneClickApproveButton(pendingCount: counts.awaitingApproval)
+                    .padding(.top, 1)
+            }
+            .padding(.horizontal, 13)
+
+            HStack(alignment: .top, spacing: 6) {
+                FlowLayout(horizontalSpacing: 5, verticalSpacing: 5) {
+                    ForEach(hostSummaries, id: \.host.storageKey) { item in
+                        hostQuickChip(item.host, connection: item.connection, count: item.sessionCount)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                HStack(spacing: 5) {
+                    sshServersMenuButton
+                    sortMenuButton
+                }
+                .fixedSize()
             }
             .padding(.horizontal, 13)
         }
