@@ -197,6 +197,7 @@ final class StatusBarController: NSObject {
         let finalFrame = computeTargetPanelFrame()
         panel.setFrame(finalFrame, display: true)
         panel.makeKeyAndOrderFront(nil)
+        model.panelDidOpen()
         installDismissMonitors()
 
         scheduleResizeVisiblePanel()
@@ -246,8 +247,12 @@ final class StatusBarController: NSObject {
     }
 
     func closePanel() {
+        let wasVisible = panel.isVisible
         panel.orderOut(nil)
         removeDismissMonitors()
+        if wasVisible {
+            model.panelDidClose()
+        }
     }
 
     private func installDismissMonitors() {

@@ -6,12 +6,12 @@ public enum AntigravityAdapter {
     public static func loadLocalSessions(
         homeDirectory: String = NSHomeDirectory(),
         lookbackHours: Double = 96,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) async -> [AgentSession] {
         let path = (homeDirectory as NSString)
             .appendingPathComponent(".gemini/antigravity/conversation_summaries.db")
         let cutoff = Date().addingTimeInterval(-lookbackHours * 3600)
-        var sessions = readSummaries(at: path, since: cutoff, seenSessionIDs: seenSessionIDs)
+        var sessions = readSummaries(at: path, since: cutoff, seenAtByID: seenAtByID)
         for index in sessions.indices {
             sessions[index].groupDirectory = await GitRootResolver.shared.resolveGroupDirectory(for: sessions[index].cwd)
         }
@@ -41,7 +41,7 @@ public enum AntigravityAdapter {
         )
     }
 
-    private static func readSummaries(at path: String, since cutoff: Date, seenSessionIDs: Set<String>) -> [AgentSession] {
+    private static func readSummaries(at path: String, since cutoff: Date, seenAtByID: [String: TimeInterval]) -> [AgentSession] {
         var db: OpaquePointer?
         let result = sqlite3_open_v2(path, &db, SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX, nil)
         guard let db else { return [] }
@@ -82,7 +82,11 @@ public enum AntigravityAdapter {
                 sourceFilePath: path,
                 startedAt: updatedAt,
                 lastActivityAt: updatedAt,
-                isSeen: seenSessionIDs.contains(id)
+                isSeen: SeenSessionLookup.isSeen(
+                    sessionID: id,
+                    lastActivityAt: updatedAt,
+                    seenAtByID: seenAtByID
+                )
             ))
         }
         return sessions

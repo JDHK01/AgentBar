@@ -81,6 +81,75 @@ struct AgentBarHookMain {
         precondition(mergedCodex[0].turnCount == 2)
         precondition(SessionDeduplicator.deduplicate([mergedCodex[0], mergedCodex[0]])[0].turnCount == 2)
 
+        // Regression test: timestamp-based seen state clears green on current turn, but re-alerts on a newer turn
+        let seenMapOld: [String: TimeInterval] = [
+            "local:codex:\(sharedCodexID)": now.addingTimeInterval(-300).timeIntervalSince1970
+        ]
+        let oldShardSeen = CodexAdapter.parseRollout(
+            jsonl: """
+            {"timestamp":"2026-11-19T08:55:02Z","type":"session_meta","payload":{"id":"\(sharedCodexID)","cwd":"/tmp/proj","originator":"Codex Desktop","source":"vscode"}}
+            {"timestamp":"2026-11-19T08:55:04Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"旧回复"}}
+            {"timestamp":"2026-11-19T08:55:05Z","type":"event_msg","payload":{"type":"task_complete","duration_ms":500}}
+            """,
+            filePath: "/tmp/rollout-old-\(sharedCodexID).jsonl",
+            fileModificationDate: now.addingTimeInterval(-600),
+            host: .local,
+            seenAtByID: seenMapOld
+        )!
+        let newShardUnseen = CodexAdapter.parseRollout(
+            jsonl: """
+            {"timestamp":"2026-11-19T08:55:54Z","type":"session_meta","payload":{"id":"\(sharedCodexID)","cwd":"/tmp/proj","originator":"Codex Desktop","source":"vscode"}}
+            {"timestamp":"2026-11-19T09:05:36Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"新生成的回复"}}
+            {"timestamp":"2026-11-19T09:05:36Z","type":"event_msg","payload":{"type":"task_complete","duration_ms":1000}}
+            """,
+            filePath: "/tmp/rollout-new-\(sharedCodexID)_shard2.jsonl",
+            fileModificationDate: now.addingTimeInterval(-10),
+            host: .local,
+            seenAtByID: seenMapOld
+        )!
+        precondition(oldShardSeen.isSeen == true && oldShardSeen.status == .waitingForInput)
+        precondition(newShardUnseen.isSeen == false && newShardUnseen.status == .completed)
+        let mergedAfterNewTurn = SessionDeduplicator.deduplicate([oldShardSeen, newShardUnseen])
+        precondition(mergedAfterNewTurn[0].isSeen == false && mergedAfterNewTurn[0].status == .completed)
+
+        // Regression test: Codex Desktop native read state (`electron-thread-read-state-v1`) auto-clears green when viewed
+        let codexReadWhenUnread = CodexReadState(
+            hasReadState: true,
+            unreadThreadIDs: [sharedCodexID],
+            userActivityAtByThreadID: [:],
+            stateFileUpdatedAt: now
+        )
+        let codexReadWhenViewed = CodexReadState(
+            hasReadState: true,
+            unreadThreadIDs: [],
+            userActivityAtByThreadID: [sharedCodexID: now.timeIntervalSince1970],
+            stateFileUpdatedAt: now
+        )
+        let unreadDesktopSession = CodexAdapter.parseRollout(
+            jsonl: """
+            {"timestamp":"2026-11-19T08:55:54Z","type":"session_meta","payload":{"id":"\(sharedCodexID)","cwd":"/tmp/proj","originator":"Codex Desktop","source":"vscode"}}
+            {"timestamp":"2026-11-19T09:05:36Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"桌面端回复"}}
+            {"timestamp":"2026-11-19T09:05:36Z","type":"event_msg","payload":{"type":"task_complete","duration_ms":1000}}
+            """,
+            filePath: "/tmp/rollout-new-\(sharedCodexID)_shard2.jsonl",
+            fileModificationDate: now.addingTimeInterval(-10),
+            host: .local,
+            readState: codexReadWhenUnread
+        )!
+        let viewedDesktopSession = CodexAdapter.parseRollout(
+            jsonl: """
+            {"timestamp":"2026-11-19T08:55:54Z","type":"session_meta","payload":{"id":"\(sharedCodexID)","cwd":"/tmp/proj","originator":"Codex Desktop","source":"vscode"}}
+            {"timestamp":"2026-11-19T09:05:36Z","type":"response_item","payload":{"type":"message","role":"assistant","content":"桌面端回复"}}
+            {"timestamp":"2026-11-19T09:05:36Z","type":"event_msg","payload":{"type":"task_complete","duration_ms":1000}}
+            """,
+            filePath: "/tmp/rollout-new-\(sharedCodexID)_shard2.jsonl",
+            fileModificationDate: now.addingTimeInterval(-10),
+            host: .local,
+            readState: codexReadWhenViewed
+        )!
+        precondition(unreadDesktopSession.isSeen == false && unreadDesktopSession.status == .completed)
+        precondition(viewedDesktopSession.isSeen == true && viewedDesktopSession.status == .waitingForInput)
+
         let subJSONL = """
         {"type":"user","sessionId":"s-1","agentId":"a68596","isSidechain":true,"cwd":"/Users/test/repo","timestamp":"2026-11-19T04:10:00Z","message":{"role":"user","content":"子代理任务"}}
         """

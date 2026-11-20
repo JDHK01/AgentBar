@@ -5,7 +5,7 @@ public enum CursorTraeAdapter {
     public static func loadLocalSessions(
         homeDirectory: String = NSHomeDirectory(),
         lookbackHours: Double = 96,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) async -> [AgentSession] {
         var all: [AgentSession] = []
         let cursorDB = (homeDirectory as NSString)
@@ -17,7 +17,7 @@ public enum CursorTraeAdapter {
             workspaceStorageRoot: cursorWorkspaceRoot,
             kind: .cursor,
             lookbackHours: lookbackHours,
-            seenSessionIDs: seenSessionIDs
+            seenAtByID: seenAtByID
         ))
 
         for folderName in ["Trae", "Trae CN"] {
@@ -30,7 +30,7 @@ public enum CursorTraeAdapter {
                 workspaceStorageRoot: traeWS,
                 kind: .trae,
                 lookbackHours: lookbackHours,
-                seenSessionIDs: seenSessionIDs
+                seenAtByID: seenAtByID
             ))
         }
         return all
@@ -69,7 +69,7 @@ public enum CursorTraeAdapter {
         workspaceStorageRoot: String,
         kind: AgentKind,
         lookbackHours: Double,
-        seenSessionIDs: Set<String>
+        seenAtByID: [String: TimeInterval]
     ) async -> [AgentSession] {
         guard FileManager.default.fileExists(atPath: dbPath) else { return [] }
         let fallbackWorkspace = readRecentWorkspaceFolder(root: workspaceStorageRoot)
@@ -126,7 +126,11 @@ public enum CursorTraeAdapter {
             let generatingBubbles = (obj["generatingBubbleIds"] as? [Any]) ?? []
             let rawStatus = (obj["status"] as? String) ?? "none"
             let sessionID = "local:\(kind.rawValue):\(rawID)"
-            let isSeen = seenSessionIDs.contains(sessionID)
+            let isSeen = SeenSessionLookup.isSeen(
+                sessionID: sessionID,
+                lastActivityAt: updatedAt,
+                seenAtByID: seenAtByID
+            )
 
             let status: SessionStatus
             if !generatingBubbles.isEmpty || rawStatus == "generating" {

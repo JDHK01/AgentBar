@@ -713,7 +713,7 @@ public enum SessionDeduplicator {
         var out = newer
         out.startedAt = min(newer.startedAt, older.startedAt)
         out.lastActivityAt = max(newer.lastActivityAt, older.lastActivityAt)
-        out.isSeen = newer.isSeen || older.isSeen
+        out.isSeen = newer.isSeen
 
         if isGenericFallbackTitle(newer.title) && !isGenericFallbackTitle(older.title) && !older.title.isEmpty {
             out.title = older.title
@@ -764,5 +764,17 @@ public enum SessionDeduplicator {
 
     private static func isGenericFallbackTitle(_ title: String) -> Bool {
         title.hasSuffix(" 会话") || title == "Codex 会话" || title == "Claude 会话"
+    }
+}
+
+public enum SeenSessionLookup {
+    /// Returns true if the session's latest activity was already viewed (with 2s clock/mtime tolerance).
+    public static func isSeen(
+        sessionID: String,
+        lastActivityAt: Date,
+        seenAtByID: [String: TimeInterval]
+    ) -> Bool {
+        guard let seenTS = seenAtByID[sessionID] else { return false }
+        return seenTS + 2.0 >= lastActivityAt.timeIntervalSince1970
     }
 }

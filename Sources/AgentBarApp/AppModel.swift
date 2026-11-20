@@ -40,7 +40,7 @@ final class AppModel {
     var isSearchVisible: Bool = false
     var expandedSessionIDs: Set<String> = []
     var collapsedGroupIDs: Set<String> = []
-    var seenSessionIDs: Set<String> = []
+    var seenAtBySessionID: [String: TimeInterval] = [:]
     var pinnedGroupIDs: Set<String> = []
     var customHostOrder: [String] = []
 
@@ -124,7 +124,14 @@ final class AppModel {
     private var localPollTask: Task<Void, Never>?
     private var sshPollTask: Task<Void, Never>?
     private var balancePollTask: Task<Void, Never>?
+    private var viewDetectorTask: Task<Void, Never>?
     private var lastSSHProbeAt: Date?
+    private let viewDetector = ActiveSessionViewDetector()
+
+    var isPanelVisible: Bool = false
+    private var currentlyVisibleRowIDsInScroll: Set<String> = []
+    private var panelRowVisibleSince: [String: Date] = [:]
+    private var panelViewedSessionIDs: Set<String> = []
 
     init() {
         loadPersistedPreferences()
@@ -251,21 +258,85 @@ final class AppModel {
     }
 
     func markSessionSeen(_ sessionID: String) {
-        seenSessionIDs.insert(sessionID)
-        saveCodable(Array(seenSessionIDs), key: "seenSessionIDs")
-        if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
-            sessions[idx].isSeen = true
+        markSessionsSeen([sessionID])
+    }
+
+    func markSessionsSeen(_ sessionIDs: [String]) {
+        guard !sessionIDs.isEmpty else { return }
+        let nowTS = Date().timeIntervalSince1970
+        var didChange = false
+        for sessionID in sessionIDs {
+            var targetTS = nowTS
+            if let idx = sessions.firstIndex(where: { $0.id == sessionID }) {
+                targetTS = max(nowTS, sessions[idx].lastActivityAt.timeIntervalSince1970 + 1.0)
+                if !sessions[idx].isSeen || sessions[idx].status == .completed {
+                    sessions[idx].isSeen = true
+                    if sessions[idx].status == .completed {
+                        sessions[idx].status = .waitingForInput
+                    }
+                    didChange = true
+                }
+            }
+            if (seenAtBySessionID[sessionID] ?? 0) < targetTS {
+                seenAtBySessionID[sessionID] = targetTS
+                didChange = true
+            }
         }
-        notifyStatusBar()
+        if didChange {
+            persistSeenSessions()
+            notifyStatusBar()
+        }
     }
 
     func markAllCompletedSeen() {
-        for idx in sessions.indices where sessions[idx].status == .completed || sessions[idx].status == .failed {
-            sessions[idx].isSeen = true
-            seenSessionIDs.insert(sessions[idx].id)
+        let targetIDs = sessions
+            .filter { ($0.status == .completed || $0.status == .failed) && !$0.isSeen }
+            .map(\.id)
+        markSessionsSeen(targetIDs)
+    }
+
+    func panelDidOpen() {
+        isPanelVisible = true
+        panelViewedSessionIDs.removeAll()
+        let now = Date()
+        panelRowVisibleSince = Dictionary(
+            uniqueKeysWithValues: currentlyVisibleRowIDsInScroll.map { ($0, now) }
+        )
+    }
+
+    func panelDidClose() {
+        let now = Date()
+        for (sessionID, since) in panelRowVisibleSince where now.timeIntervalSince(since) >= 1.2 {
+            panelViewedSessionIDs.insert(sessionID)
         }
-        saveCodable(Array(seenSessionIDs), key: "seenSessionIDs")
-        notifyStatusBar()
+        isPanelVisible = false
+        panelRowVisibleSince.removeAll()
+
+        let viewedCompleted = panelViewedSessionIDs.filter { id in
+            guard let s = sessions.first(where: { $0.id == id }) else { return false }
+            return s.status == .completed && !s.isSeen && now.timeIntervalSince(s.lastActivityAt) >= 1.0
+        }
+        panelViewedSessionIDs.removeAll()
+        if !viewedCompleted.isEmpty {
+            markSessionsSeen(Array(viewedCompleted))
+        }
+    }
+
+    func sessionRowScrollVisibilityChanged(sessionID: String, isVisible: Bool) {
+        let now = Date()
+        if isVisible {
+            currentlyVisibleRowIDsInScroll.insert(sessionID)
+            if isPanelVisible && panelRowVisibleSince[sessionID] == nil {
+                panelRowVisibleSince[sessionID] = now
+            }
+        } else {
+            currentlyVisibleRowIDsInScroll.remove(sessionID)
+            if let since = panelRowVisibleSince.removeValue(forKey: sessionID),
+               isPanelVisible,
+               now.timeIntervalSince(since) >= 1.2 {
+                panelViewedSessionIDs.insert(sessionID)
+            }
+        }
     }
 
     func isGroupCollapsed(_ id: String, defaultOffline: Bool = false) -> Bool {
@@ -531,17 +602,17 @@ final class AppModel {
         guard !demoModeEnabled else { return }
         let lookback = lookbackHours
         let subagents = includeSubagents
-        let seen = seenSessionIDs
+        let seen = seenAtBySessionID
 
         async let claudeList = ClaudeCodeAdapter.loadLocalSessions(
             lookbackHours: lookback,
             includeSubagents: subagents,
-            seenSessionIDs: seen
+            seenAtByID: seen
         )
-        async let codexList = CodexAdapter.loadLocalSessions(lookbackHours: lookback, includeSubagents: subagents, seenSessionIDs: seen)
-        async let dshList = DeepSeekHarnessAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
-        async let cursorList = CursorTraeAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
-        async let antigravityList = AntigravityAdapter.loadLocalSessions(lookbackHours: lookback, seenSessionIDs: seen)
+        async let codexList = CodexAdapter.loadLocalSessions(lookbackHours: lookback, includeSubagents: subagents, seenAtByID: seen)
+        async let dshList = DeepSeekHarnessAdapter.loadLocalSessions(lookbackHours: lookback, seenAtByID: seen)
+        async let cursorList = CursorTraeAdapter.loadLocalSessions(lookbackHours: lookback, seenAtByID: seen)
+        async let antigravityList = AntigravityAdapter.loadLocalSessions(lookbackHours: lookback, seenAtByID: seen)
 
         let antigravity = await antigravityList
         var local = SessionDeduplicator.deduplicate(await (claudeList + codexList + dshList + cursorList) + antigravity)
@@ -555,6 +626,7 @@ final class AppModel {
 
         let pendingApprovals = HookApprovalManager.loadLocalPendingApprovals()
         mergePendingApprovals(pendingApprovals, into: &local, host: .local)
+        applyLiveSeenState(to: &local)
 
         let remoteExisting = sessions.filter { !$0.host.isLocal }
         self.sessions = SessionDeduplicator.deduplicate(local + remoteExisting)
@@ -593,7 +665,7 @@ final class AppModel {
             }
         }
 
-        let seen = seenSessionIDs
+        let seen = seenAtBySessionID
         let remoteLookback = max(lookbackHours, 168)
         let subagents = includeSubagents
 
@@ -604,7 +676,7 @@ final class AppModel {
                         alias: cfg.alias,
                         lookbackHours: remoteLookback,
                         includeSubagents: subagents,
-                        seenSessionIDs: seen
+                        seenAtByID: seen
                     )
                     return (cfg, res)
                 }
@@ -621,6 +693,7 @@ final class AppModel {
                     if cfg.approvalEnabled {
                         mergePendingApprovals(res.pendingApprovals, into: &remoteList, host: hostID)
                     }
+                    applyLiveSeenState(to: &remoteList)
                     sessions.removeAll { $0.host == hostID }
                     sessions.append(contentsOf: remoteList)
                     sessions = SessionDeduplicator.deduplicate(sessions)
@@ -660,7 +733,7 @@ final class AppModel {
             alias: alias,
             lookbackHours: max(lookbackHours, 168),
             includeSubagents: includeSubagents,
-            seenSessionIDs: seenSessionIDs
+            seenAtByID: seenAtBySessionID
         )
         probingHostIDs.remove(hostID)
         hostStates[hostID] = res.connection
@@ -672,6 +745,7 @@ final class AppModel {
             if cfg.approvalEnabled {
                 mergePendingApprovals(res.pendingApprovals, into: &remoteList, host: hostID)
             }
+            applyLiveSeenState(to: &remoteList)
             sessions.removeAll { $0.host == hostID }
             sessions.append(contentsOf: remoteList)
             sessions = SessionDeduplicator.deduplicate(sessions)
@@ -809,7 +883,8 @@ final class AppModel {
             guard let self else { return }
             await self.refreshAll(includeBalances: true)
             while !Task.isCancelled {
-                try? await Task.sleep(for: .seconds(4))
+                let fastPoll = self.menuBarCounts.completedUnseen > 0
+                try? await Task.sleep(for: .seconds(fastPoll ? 2.2 : 4.0))
                 if !self.demoModeEnabled {
                     await self.refreshLocalSessions()
                 }
@@ -820,6 +895,19 @@ final class AppModel {
                 try? await Task.sleep(for: .seconds(25))
                 guard let self, !self.demoModeEnabled else { continue }
                 await self.refreshSSHHosts()
+            }
+        }
+        viewDetectorTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(1.2))
+                guard let self, !self.demoModeEnabled else { continue }
+                let viewedIDs = self.viewDetector.detectViewedSessionIDs(
+                    sessions: self.sessions,
+                    sshHosts: self.sshHosts
+                )
+                if !viewedIDs.isEmpty {
+                    self.markSessionsSeen(viewedIDs)
+                }
             }
         }
         restartBalancePolling()
@@ -946,8 +1034,13 @@ final class AppModel {
         if ud.object(forKey: "notificationsEnabled") != nil {
             notificationsEnabled = ud.bool(forKey: "notificationsEnabled")
         }
-        if let seen: [String] = loadCodable(key: "seenSessionIDs") {
-            seenSessionIDs = Set(seen)
+        if let seenMap: [String: TimeInterval] = loadCodable(key: "seenAtBySessionID") {
+            let minKeep = Date().addingTimeInterval(-14 * 86_400).timeIntervalSince1970
+            seenAtBySessionID = seenMap.filter { $0.value >= minKeep }
+        } else if let legacySeen: [String] = loadCodable(key: "seenSessionIDs") {
+            let migratedTS = Date().timeIntervalSince1970
+            seenAtBySessionID = Dictionary(uniqueKeysWithValues: legacySeen.map { ($0, migratedTS) })
+            persistSeenSessions()
         }
         if let collapsed: [String] = loadCodable(key: "collapsedGroupIDs") {
             collapsedGroupIDs = Set(collapsed)
@@ -982,6 +1075,30 @@ final class AppModel {
             let validIDs = Set(balanceSources.filter(\.isEnabled).map(\.id))
             balanceReadings = cachedReadings.filter { validIDs.contains($0.sourceID) }
         }
+    }
+
+    private func applyLiveSeenState(to list: inout [AgentSession]) {
+        guard !seenAtBySessionID.isEmpty else { return }
+        for idx in list.indices where !list[idx].isSeen {
+            if SeenSessionLookup.isSeen(
+                sessionID: list[idx].id,
+                lastActivityAt: list[idx].lastActivityAt,
+                seenAtByID: seenAtBySessionID
+            ) {
+                list[idx].isSeen = true
+                if list[idx].status == .completed {
+                    list[idx].status = .waitingForInput
+                }
+            }
+        }
+    }
+
+    private func persistSeenSessions() {
+        let minKeep = Date().addingTimeInterval(-14 * 86_400).timeIntervalSince1970
+        if seenAtBySessionID.count > 400 {
+            seenAtBySessionID = seenAtBySessionID.filter { $0.value >= minKeep }
+        }
+        saveCodable(seenAtBySessionID, key: "seenAtBySessionID")
     }
 
     private func saveCodable<T: Encodable>(_ value: T, key: String) {

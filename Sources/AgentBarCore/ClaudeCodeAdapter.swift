@@ -33,7 +33,7 @@ public enum ClaudeCodeAdapter {
         homeDirectory: String = NSHomeDirectory(),
         lookbackHours: Double = 72,
         includeSubagents: Bool = false,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) async -> [AgentSession] {
         let rootPath = (homeDirectory as NSString).appendingPathComponent(".claude/projects")
         let provider = detectLocalProvider(homeDirectory: homeDirectory)
@@ -60,7 +60,7 @@ public enum ClaudeCodeAdapter {
                 host: .local,
                 defaultProvider: provider,
                 includeSubagents: includeSubagents,
-                seenSessionIDs: seenSessionIDs
+                seenAtByID: seenAtByID
             ) {
                 if !acceptedIDs.contains(session.id) {
                     guard acceptedIDs.count < maxUniqueSessions else { continue }
@@ -126,7 +126,7 @@ public enum ClaudeCodeAdapter {
         host: HostID,
         defaultProvider: String = "Anthropic",
         includeSubagents: Bool = false,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) -> AgentSession? {
         var rawSessionID = fallbackSessionID
         var agentID: String?
@@ -380,7 +380,11 @@ public enum ClaudeCodeAdapter {
         } else {
             sessionID = "\(host.storageKey):claude:\(rawSessionID)"
         }
-        let isSeen = seenSessionIDs.contains(sessionID)
+        let isSeen = SeenSessionLookup.isSeen(
+            sessionID: sessionID,
+            lastActivityAt: lastActivityAt,
+            seenAtByID: seenAtByID
+        )
         let ageSeconds = Date().timeIntervalSince(lastActivityAt)
 
         let status: SessionStatus

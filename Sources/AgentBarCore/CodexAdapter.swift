@@ -1,6 +1,85 @@
 import Foundation
 
+public struct CodexReadState: Sendable {
+    public var hasReadState: Bool
+    public var unreadThreadIDs: Set<String>
+    public var userActivityAtByThreadID: [String: TimeInterval]
+    public var stateFileUpdatedAt: Date?
+
+    public init(
+        hasReadState: Bool = false,
+        unreadThreadIDs: Set<String> = [],
+        userActivityAtByThreadID: [String: TimeInterval] = [:],
+        stateFileUpdatedAt: Date? = nil
+    ) {
+        self.hasReadState = hasReadState
+        self.unreadThreadIDs = unreadThreadIDs
+        self.userActivityAtByThreadID = userActivityAtByThreadID
+        self.stateFileUpdatedAt = stateFileUpdatedAt
+    }
+}
+
 public enum CodexAdapter {
+    public static func loadReadState(homeDirectory: String = NSHomeDirectory()) -> CodexReadState {
+        let path = (homeDirectory as NSString).appendingPathComponent(".codex/.codex-global-state.json")
+        let url = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: url, options: .mappedIfSafe),
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+            return CodexReadState()
+        }
+        let mtime = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+
+        var hasReadState = false
+        var unreadIDs: Set<String> = []
+        if let readState = root["electron-thread-read-state-v1"] as? [String: Any],
+           let unreadByIdentity = readState["unreadByIdentity"] as? [String: Any] {
+            hasReadState = true
+            for (_, hostDictAny) in unreadByIdentity {
+                guard let hostDict = hostDictAny as? [String: Any] else { continue }
+                for (_, arrAny) in hostDict {
+                    guard let arr = arrAny as? [String] else { continue }
+                    unreadIDs.formUnion(arr)
+                }
+            }
+        }
+
+        var activityByThread: [String: TimeInterval] = [:]
+        for (key, val) in root where key.hasPrefix("electron-owner-atoms:") {
+            guard let atoms = val as? [String: Any],
+                  let activityMap = atoms["thread-user-activity-times-v1"] as? [String: Any] else {
+                continue
+            }
+            for (tupleJSON, rawTS) in activityMap {
+                let numVal: Double?
+                if let d = rawTS as? Double {
+                    numVal = d
+                } else if let i = rawTS as? Int {
+                    numVal = Double(i)
+                } else if let n = rawTS as? NSNumber {
+                    numVal = n.doubleValue
+                } else {
+                    numVal = nil
+                }
+                guard let raw = numVal, raw > 0 else { continue }
+                let sec = raw > 10_000_000_000 ? (raw / 1000.0) : raw
+                if let keyData = tupleJSON.data(using: .utf8),
+                   let tuple = try? JSONSerialization.jsonObject(with: keyData) as? [Any],
+                   tuple.count >= 2,
+                   let threadID = tuple[1] as? String,
+                   !threadID.isEmpty {
+                    activityByThread[threadID] = max(activityByThread[threadID] ?? 0, sec)
+                }
+            }
+        }
+
+        return CodexReadState(
+            hasReadState: hasReadState,
+            unreadThreadIDs: unreadIDs,
+            userActivityAtByThreadID: activityByThread,
+            stateFileUpdatedAt: mtime
+        )
+    }
+
     public static func loadThreadIndex(homeDirectory: String = NSHomeDirectory()) -> [String: String] {
         let path = (homeDirectory as NSString).appendingPathComponent(".codex/session_index.jsonl")
         guard let content = try? String(contentsOfFile: path, encoding: .utf8) else { return [:] }
@@ -53,10 +132,11 @@ public enum CodexAdapter {
         homeDirectory: String = NSHomeDirectory(),
         lookbackHours: Double = 72,
         includeSubagents: Bool = false,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) async -> [AgentSession] {
         let sessionsRoot = (homeDirectory as NSString).appendingPathComponent(".codex/sessions")
         let indexMap = loadThreadIndex(homeDirectory: homeDirectory)
+        let readState = loadReadState(homeDirectory: homeDirectory)
         let defaultProvider = detectDefaultProvider(homeDirectory: homeDirectory)
         let cutoff = Date().addingTimeInterval(-lookbackHours * 3600)
         let candidates = ClaudeCodeAdapter.collectRecentJSONLFiles(rootPath: sessionsRoot, cutoff: cutoff)
@@ -76,7 +156,8 @@ public enum CodexAdapter {
                 threadTitles: indexMap,
                 defaultProvider: defaultProvider,
                 includeSubagents: includeSubagents,
-                seenSessionIDs: seenSessionIDs
+                readState: readState,
+                seenAtByID: seenAtByID
             ) {
                 if !acceptedIDs.contains(session.id) {
                     guard acceptedIDs.count < maxUniqueSessions else { continue }
@@ -112,7 +193,8 @@ public enum CodexAdapter {
         threadTitles: [String: String] = [:],
         defaultProvider: String = "OpenAI",
         includeSubagents: Bool = false,
-        seenSessionIDs: Set<String> = []
+        readState: CodexReadState = CodexReadState(),
+        seenAtByID: [String: TimeInterval] = [:]
     ) -> AgentSession? {
         var rawID = URL(fileURLWithPath: filePath ?? "codex").deletingPathExtension().lastPathComponent
         if let uuidRange = rawID.range(
@@ -362,8 +444,25 @@ public enum CodexAdapter {
         let recentTail = Array(recent.suffix(5).reversed())
 
         let sessionID = "\(host.storageKey):codex:\(rawID)"
-        let isSeen = seenSessionIDs.contains(sessionID)
         let age = Date().timeIntervalSince(lastActivityAt)
+        let seenInAgentBar = SeenSessionLookup.isSeen(
+            sessionID: sessionID,
+            lastActivityAt: lastActivityAt,
+            seenAtByID: seenAtByID
+        )
+        let isCodexAppLocal = host.isLocal && (kind == .codexDesktop || launchEnv == .codexApp)
+        let seenByActivityTime = isCodexAppLocal
+            && (readState.userActivityAtByThreadID[rawID].map { $0 + 2.0 >= lastActivityAt.timeIntervalSince1970 } ?? false)
+        let stateFileSettled: Bool = {
+            if age >= 3.0 { return true }
+            guard let stateMtime = readState.stateFileUpdatedAt else { return false }
+            return stateMtime.timeIntervalSince(lastActivityAt) >= -1.5
+        }()
+        let seenByNativeUnread = isCodexAppLocal
+            && readState.hasReadState
+            && stateFileSettled
+            && !readState.unreadThreadIDs.contains(rawID)
+        let isSeen = seenInAgentBar || seenByActivityTime || seenByNativeUnread
 
         let status: SessionStatus
         if errorBanner != nil && age < 7200 {

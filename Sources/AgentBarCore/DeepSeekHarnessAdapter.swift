@@ -4,7 +4,7 @@ public enum DeepSeekHarnessAdapter {
     public static func loadLocalSessions(
         homeDirectory: String = NSHomeDirectory(),
         lookbackHours: Double = 96,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) async -> [AgentSession] {
         let dirPath = (homeDirectory as NSString).appendingPathComponent(".dsh/storages/session_projcache/sessions")
         let fm = FileManager.default
@@ -27,7 +27,7 @@ public enum DeepSeekHarnessAdapter {
                       filePath: url.path,
                       fileModificationDate: mtime,
                       host: .local,
-                      seenSessionIDs: seenSessionIDs
+                      seenAtByID: seenAtByID
                   ) else {
                 continue
             }
@@ -43,7 +43,7 @@ public enum DeepSeekHarnessAdapter {
         filePath: String?,
         fileModificationDate: Date,
         host: HostID,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) -> AgentSession? {
         guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
               let record = root["record"] as? [String: Any],
@@ -129,7 +129,11 @@ public enum DeepSeekHarnessAdapter {
         let turnOpen = (approvalVal?["turnOpen"] as? Bool) ?? false
 
         let sessionID = "\(host.storageKey):dsh:\(fallbackID)"
-        let isSeen = seenSessionIDs.contains(sessionID)
+        let isSeen = SeenSessionLookup.isSeen(
+            sessionID: sessionID,
+            lastActivityAt: fileModificationDate,
+            seenAtByID: seenAtByID
+        )
         let age = Date().timeIntervalSince(fileModificationDate)
 
         let status: SessionStatus

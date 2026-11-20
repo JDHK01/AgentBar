@@ -24,6 +24,9 @@ struct SessionRowView: View {
             }
         }
         .padding(.vertical, isExpanded ? 3 : 0.5)
+        .onScrollVisibilityChange(threshold: 0.6) { isVisible in
+            model.sessionRowScrollVisibilityChanged(sessionID: session.id, isVisible: isVisible)
+        }
     }
 
     private var mainRow: some View {

@@ -409,7 +409,7 @@ fi
         alias: String,
         lookbackHours: Double = 168,
         includeSubagents: Bool = false,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) async -> SSHProbeResult {
         let hostID = HostID.ssh(alias: alias)
         HookApprovalManager.ensureDirectories()
@@ -461,7 +461,7 @@ fi
             host: hostID,
             lookbackHours: lookbackHours,
             includeSubagents: includeSubagents,
-            seenSessionIDs: seenSessionIDs
+            seenAtByID: seenAtByID
         )
         return SSHProbeResult(
             connection: HostConnectionState(
@@ -512,7 +512,7 @@ fi
         host: HostID,
         lookbackHours: Double = 168,
         includeSubagents: Bool = false,
-        seenSessionIDs: Set<String> = []
+        seenAtByID: [String: TimeInterval] = [:]
     ) -> (remoteHome: String?, sessions: [AgentSession], pendingApprovals: [PendingApproval]) {
         var remoteHome: String?
         var codexTitles: [String: String] = [:]
@@ -581,7 +581,7 @@ fi
                     fileModificationDate: b.mtime,
                     host: host,
                     includeSubagents: includeSubagents,
-                    seenSessionIDs: seenSessionIDs
+                    seenAtByID: seenAtByID
                 ) {
                     sessions.append(s)
                 }
@@ -594,7 +594,7 @@ fi
                     host: host,
                     threadTitles: codexTitles,
                     includeSubagents: includeSubagents,
-                    seenSessionIDs: seenSessionIDs
+                    seenAtByID: seenAtByID
                 ) {
                     sessions.append(s)
                 }
@@ -608,7 +608,7 @@ fi
                        filePath: b.path,
                        fileModificationDate: b.mtime,
                        host: host,
-                       seenSessionIDs: seenSessionIDs
+                       seenAtByID: seenAtByID
                    ) {
                     sessions.append(s)
                 }
