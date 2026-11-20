@@ -448,7 +448,23 @@ struct PanelView: View {
 
     private var sortMenuButton: some View {
         Menu {
-            Section("项目（工作目录）排序") {
+            Section("默认界面排列方式") {
+                ForEach(FocusArrangementOrder.allCases) { order in
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.16)) {
+                            model.focusArrangementOrder = order
+                        }
+                    } label: {
+                        if model.focusArrangementOrder == order {
+                            Label(order.title, systemImage: "checkmark")
+                        } else {
+                            Text(order.title)
+                        }
+                    }
+                }
+            }
+
+            Section("所有对话 · 项目（工作目录）排序") {
                 ForEach(ProjectSortOrder.allCases) { order in
                     Button {
                         withAnimation(.easeInOut(duration: 0.16)) {
@@ -464,7 +480,7 @@ struct PanelView: View {
                 }
             }
 
-            Section("服务器（主机）排序") {
+            Section("所有对话 · 服务器（主机）排序") {
                 ForEach(HostSortOrder.allCases) { order in
                     Button {
                         withAnimation(.easeInOut(duration: 0.16)) {
@@ -503,7 +519,7 @@ struct PanelView: View {
             HStack(spacing: 3) {
                 Image(systemName: "arrow.up.arrow.down")
                     .font(.system(size: 10, weight: .semibold))
-                Text(model.projectSortOrder.shortLabel)
+                Text(model.focusArrangementOrder.shortLabel)
                     .font(.system(size: 10.5, weight: .medium))
                     .lineLimit(1)
             }
@@ -512,7 +528,7 @@ struct PanelView: View {
         .menuStyle(.button)
         .controlSize(.small)
         .buttonStyle(.glass)
-        .help("排序项目工作目录与服务器（右键任意服务器/目录可置顶或手动调序）")
+        .help("切换默认界面排列方式（新生成 / 待审批·运行中顺序）及所有对话排序规则")
     }
 
     private var sessionScrollList: some View {
@@ -524,12 +540,14 @@ struct PanelView: View {
                         model.selectedSettingsTab = 3
                         onOpenSettings()
                     }
+                } else if model.isDefaultFocusMode {
+                    defaultFocusAndArchiveView(allHostGroups: hostGroups)
                 } else if hostGroups.isEmpty || (hostGroups.count == 1 && hostGroups[0].host.isLocal && hostGroups[0].isEmpty) {
                     emptyPlaceholder
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(hostGroups) { hostGroup in
-                            hostSection(hostGroup)
+                            hostSection(hostGroup, trackPanelVisibility: true)
                         }
                     }
                     .padding(.bottom, 8)
@@ -574,7 +592,218 @@ struct PanelView: View {
         .padding(.vertical, 48)
     }
 
-    private func hostSection(_ hostGroup: HostSessionGroup) -> some View {
+    @ViewBuilder
+    private func defaultFocusAndArchiveView(allHostGroups: [HostSessionGroup]) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if model.focusArrangementOrder == .byHostAndProject {
+                let focusGroups = model.focusHostGroups
+                focusByProjectHeader
+                if focusGroups.isEmpty {
+                    Text("当前暂无新生成、待审批或运行中的会话")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 6)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(focusGroups) { group in
+                            hostSection(group, trackPanelVisibility: true)
+                        }
+                    }
+                }
+            } else {
+                let sections = model.focusStatusSections
+                ForEach(Array(sections.enumerated()), id: \.element.id) { index, section in
+                    focusStatusSectionView(section, showOrderButton: index == 0)
+                }
+            }
+
+            allConversationsDisclosureSection(allHostGroups: allHostGroups)
+        }
+        .padding(.bottom, 8)
+    }
+
+    private var focusByProjectHeader: some View {
+        HStack(spacing: 6) {
+            StatusDotView(status: .completed, size: 6.5)
+            StatusDotView(status: .generating, size: 6.5)
+            Text("需关注与运行中（按项目分组）")
+                .font(.system(size: 12, weight: .bold))
+            Spacer()
+            quickCycleArrangementButton
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 6)
+        .padding(.bottom, 2)
+    }
+
+    private func focusStatusSectionView(_ section: FocusStatusSection, showOrderButton: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                StatusDotView(status: section.badgeStatus, size: 7)
+                if let secondStatus = section.secondaryBadgeStatus {
+                    StatusDotView(status: secondStatus, size: 7)
+                }
+                Text(section.title)
+                    .font(.system(size: 12, weight: .bold))
+                    .lineLimit(1)
+
+                Text("\(section.sessions.count)")
+                    .font(.system(size: 10.5, weight: .bold, design: .rounded))
+                    .monospacedDigit()
+                    .foregroundStyle(section.sessions.isEmpty ? .secondary : StatusPalette.textColor(for: section.badgeStatus))
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 1)
+                    .background(
+                        Capsule()
+                            .fill(section.sessions.isEmpty ? Color.primary.opacity(0.06) : StatusPalette.color(for: section.badgeStatus).opacity(0.18))
+                    )
+
+                if section.sessions.isEmpty {
+                    Text(section.emptyHint)
+                        .font(.system(size: 10.5))
+                        .foregroundStyle(.secondary.opacity(0.82))
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 4)
+
+                if showOrderButton {
+                    quickCycleArrangementButton
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 6)
+            .padding(.bottom, 2)
+
+            if !section.sessions.isEmpty {
+                VStack(alignment: .leading, spacing: 1) {
+                    ForEach(section.sessions) { session in
+                        SessionRowView(
+                            session: session,
+                            isExpanded: model.expandedSessionIDs.contains(session.id),
+                            model: model,
+                            showLocationContext: true,
+                            trackPanelVisibility: true
+                        )
+                    }
+                }
+                .padding(.horizontal, 8)
+            }
+        }
+    }
+
+    private var quickCycleArrangementButton: some View {
+        Menu {
+            ForEach(FocusArrangementOrder.allCases) { order in
+                Button {
+                    withAnimation(.easeInOut(duration: 0.16)) {
+                        model.focusArrangementOrder = order
+                    }
+                } label: {
+                    if model.focusArrangementOrder == order {
+                        Label(order.title, systemImage: "checkmark")
+                    } else {
+                        Text(order.title)
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 2.5) {
+                Image(systemName: "arrow.up.arrow.down")
+                    .font(.system(size: 9.5, weight: .semibold))
+                Text("排列")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(.secondary)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .help("修改默认界面的分区排列方式")
+    }
+
+    @ViewBuilder
+    private func allConversationsDisclosureSection(allHostGroups: [HostSessionGroup]) -> some View {
+        let totalCount = model.totalConversationCountInScope
+        let idleCount = model.inactiveConversationCountInScope
+        let titleText: String = {
+            if let host = model.selectedHostFilter {
+                return "\(host.displayTitle) 的所有对话"
+            }
+            return "所有对话"
+        }()
+        let subtitleText: String = {
+            if model.isAllConversationsExpanded {
+                return "点击收起 · 共 \(totalCount) 个"
+            }
+            if idleCount > 0 {
+                return "点击展开 · 共 \(totalCount) 个（\(idleCount) 个静默）"
+            }
+            return "点击展开 · 共 \(totalCount) 个"
+        }()
+
+        VStack(alignment: .leading, spacing: 4) {
+            Button {
+                withAnimation(.spring(duration: 0.22)) {
+                    model.isAllConversationsExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: model.isAllConversationsExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 10, weight: .bold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 11)
+
+                    Image(systemName: "tray.full.fill")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+
+                    Text(titleText)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(.primary.opacity(0.9))
+
+                    Spacer(minLength: 6)
+
+                    Text(subtitleText)
+                        .font(.system(size: 10.5, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .padding(.horizontal, 11)
+                .padding(.vertical, 7)
+                .background(
+                    RoundedRectangle(cornerRadius: 11, style: .continuous)
+                        .fill(.white.opacity(0.24))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 11, style: .continuous)
+                                .strokeBorder(.white.opacity(0.45), lineWidth: 0.6)
+                        )
+                )
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.horizontal, 12)
+            .padding(.top, 4)
+
+            if model.isAllConversationsExpanded {
+                if allHostGroups.isEmpty || (allHostGroups.count == 1 && allHostGroups[0].host.isLocal && allHostGroups[0].isEmpty) {
+                    Text("暂无近期对话记录")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 16)
+                } else {
+                    VStack(alignment: .leading, spacing: 2) {
+                        ForEach(allHostGroups) { hostGroup in
+                            hostSection(hostGroup, trackPanelVisibility: false)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func hostSection(_ hostGroup: HostSessionGroup, trackPanelVisibility: Bool = true) -> some View {
         let isOffline = !hostGroup.connection.isOnline
         let collapsed = model.isGroupCollapsed(hostGroup.id, defaultOffline: false)
         let isPinned = model.isGroupPinned(hostGroup.id)
@@ -660,7 +889,7 @@ struct PanelView: View {
                 } else {
                     VStack(alignment: .leading, spacing: 2) {
                         ForEach(hostGroup.directories) { dirGroup in
-                            directorySection(dirGroup)
+                            directorySection(dirGroup, trackPanelVisibility: trackPanelVisibility)
                         }
                         if !hostGroup.looseSessions.isEmpty {
                             VStack(alignment: .leading, spacing: 1) {
@@ -668,7 +897,8 @@ struct PanelView: View {
                                     SessionRowView(
                                         session: session,
                                         isExpanded: model.expandedSessionIDs.contains(session.id),
-                                        model: model
+                                        model: model,
+                                        trackPanelVisibility: trackPanelVisibility
                                     )
                                 }
                             }
@@ -764,7 +994,7 @@ struct PanelView: View {
         }
     }
 
-    private func directorySection(_ dirGroup: DirectorySessionGroup) -> some View {
+    private func directorySection(_ dirGroup: DirectorySessionGroup, trackPanelVisibility: Bool = true) -> some View {
         let collapsed = model.isGroupCollapsed(dirGroup.id)
         let isPinned = model.isGroupPinned(dirGroup.id)
         return VStack(alignment: .leading, spacing: 1) {
@@ -840,7 +1070,8 @@ struct PanelView: View {
                         SessionRowView(
                             session: session,
                             isExpanded: model.expandedSessionIDs.contains(session.id),
-                            model: model
+                            model: model,
+                            trackPanelVisibility: trackPanelVisibility
                         )
                     }
                 }

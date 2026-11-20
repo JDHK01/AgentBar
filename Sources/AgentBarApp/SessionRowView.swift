@@ -5,6 +5,8 @@ struct SessionRowView: View {
     let session: AgentSession
     let isExpanded: Bool
     let model: AppModel
+    var showLocationContext: Bool = false
+    var trackPanelVisibility: Bool = true
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -25,6 +27,7 @@ struct SessionRowView: View {
         }
         .padding(.vertical, isExpanded ? 3 : 0.5)
         .onScrollVisibilityChange(threshold: 0.6) { isVisible in
+            guard trackPanelVisibility else { return }
             model.sessionRowScrollVisibilityChanged(sessionID: session.id, isVisible: isVisible)
         }
     }
@@ -526,7 +529,11 @@ struct SessionRowView: View {
     }
 
     private var metaSubtitle: String {
-        var parts = [session.kind.displayName]
+        var parts: [String] = []
+        if showLocationContext {
+            parts.append(model.locationContextLabel(for: session))
+        }
+        parts.append(session.kind.displayName)
         if let m = session.model, !m.isEmpty {
             parts.append(m)
         }

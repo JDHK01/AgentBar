@@ -634,6 +634,62 @@ public enum HostSortOrder: String, Codable, CaseIterable, Identifiable, Sendable
     }
 }
 
+public enum FocusArrangementOrder: String, Codable, CaseIterable, Identifiable, Sendable {
+    case newGeneratedFirst
+    case approvalAndRunningFirst
+    case splitThreeSections
+    case byHostAndProject
+
+    public var id: String { rawValue }
+
+    public var title: String {
+        switch self {
+        case .newGeneratedFirst:
+            return "新生成 → 待审批 / 运行中（默认）"
+        case .approvalAndRunningFirst:
+            return "待审批 / 运行中 → 新生成"
+        case .splitThreeSections:
+            return "待审批 → 新生成 → 运行中（独立三栏）"
+        case .byHostAndProject:
+            return "按服务器 / 项目目录分组（仅需关注）"
+        }
+    }
+
+    public var shortLabel: String {
+        switch self {
+        case .newGeneratedFirst: return "新生成优先"
+        case .approvalAndRunningFirst: return "运行中优先"
+        case .splitThreeSections: return "三栏分组"
+        case .byHostAndProject: return "按项目排"
+        }
+    }
+}
+
+public struct FocusStatusSection: Identifiable, Sendable {
+    public let id: String
+    public let title: String
+    public let emptyHint: String
+    public let badgeStatus: SessionStatus
+    public let secondaryBadgeStatus: SessionStatus?
+    public let sessions: [AgentSession]
+
+    public init(
+        id: String,
+        title: String,
+        emptyHint: String,
+        badgeStatus: SessionStatus,
+        secondaryBadgeStatus: SessionStatus? = nil,
+        sessions: [AgentSession]
+    ) {
+        self.id = id
+        self.title = title
+        self.emptyHint = emptyHint
+        self.badgeStatus = badgeStatus
+        self.secondaryBadgeStatus = secondaryBadgeStatus
+        self.sessions = sessions
+    }
+}
+
 public enum MenuBarIconStyle: String, Codable, CaseIterable, Sendable {
     case multiDot = "multiDot"
     case singlePriority = "singlePriority"

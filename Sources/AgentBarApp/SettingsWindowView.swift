@@ -36,6 +36,12 @@ struct SettingsWindowView: View {
                     }
                 }
 
+                Picker("默认界面排列方式", selection: $model.focusArrangementOrder) {
+                    ForEach(FocusArrangementOrder.allCases) { order in
+                        Text(order.title).tag(order)
+                    }
+                }
+
                 Picker("默认项目排序", selection: $model.projectSortOrder) {
                     ForEach(ProjectSortOrder.allCases) { order in
                         Text(order.title).tag(order)

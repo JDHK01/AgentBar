@@ -43,6 +43,11 @@ final class AppModel {
     var seenAtBySessionID: [String: TimeInterval] = [:]
     var pinnedGroupIDs: Set<String> = []
     var customHostOrder: [String] = []
+    var isAllConversationsExpanded: Bool = false
+
+    var focusArrangementOrder: FocusArrangementOrder = .newGeneratedFirst {
+        didSet { UserDefaults.standard.set(focusArrangementOrder.rawValue, forKey: "focusArrangementOrder") }
+    }
 
     var projectSortOrder: ProjectSortOrder = .priorityAndRecent {
         didSet { UserDefaults.standard.set(projectSortOrder.rawValue, forKey: "projectSortOrder") }
@@ -109,7 +114,7 @@ final class AppModel {
     var tokenInputs: [UUID: String] = [:]
 
     var measuredTopChromeHeight: CGFloat = 112
-    var measuredScrollContentHeight: CGFloat = 320
+    var measuredScrollContentHeight: CGFloat = 220
     var measuredFooterHeight: CGFloat = 38
 
     var onStatusBarNeedsUpdate: (() -> Void)?
@@ -208,6 +213,159 @@ final class AppModel {
             pinnedGroupIDs: pinnedGroupIDs,
             customHostOrder: customHostOrder
         )
+    }
+
+    var isDefaultFocusMode: Bool {
+        selectedCategory == nil && searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private var hostFilteredRealSessions: [AgentSession] {
+        SessionDeduplicator.deduplicate(sessions).filter { session in
+            if session.kind.isChatOnly { return false }
+            if let hostFilter = selectedHostFilter, session.host != hostFilter {
+                return false
+            }
+            return true
+        }
+    }
+
+    var totalConversationCountInScope: Int {
+        hostFilteredRealSessions.count
+    }
+
+    var inactiveConversationCountInScope: Int {
+        hostFilteredRealSessions.filter { !Self.isFocusSession($0) }.count
+    }
+
+    var focusStatusSections: [FocusStatusSection] {
+        let scoped = hostFilteredRealSessions
+        let newCompleted = sortFocusSessions(scoped.filter { $0.status == .completed && !$0.isSeen })
+        let awaiting = sortFocusSessions(scoped.filter { $0.status == .awaitingApproval })
+        let running = sortFocusSessions(scoped.filter {
+            $0.status == .generating || $0.status == .runningTool || $0.status == .runningProcessOnly
+        })
+        let approvalAndRunning = awaiting + running
+        let failedUnseen = sortFocusSessions(scoped.filter { $0.status == .failed && !$0.isSeen })
+
+        let newSection = FocusStatusSection(
+            id: "focus:new",
+            title: "新生成",
+            emptyHint: "暂无未查看的新内容",
+            badgeStatus: .completed,
+            sessions: newCompleted
+        )
+        let combinedActiveSection = FocusStatusSection(
+            id: "focus:approval_running",
+            title: "待审批 / 运行中",
+            emptyHint: "暂无待审批或运行中会话",
+            badgeStatus: awaiting.isEmpty ? .generating : .awaitingApproval,
+            secondaryBadgeStatus: awaiting.isEmpty ? nil : .generating,
+            sessions: approvalAndRunning
+        )
+
+        var result: [FocusStatusSection]
+        switch focusArrangementOrder {
+        case .newGeneratedFirst:
+            result = [newSection, combinedActiveSection]
+        case .approvalAndRunningFirst:
+            result = [combinedActiveSection, newSection]
+        case .splitThreeSections:
+            result = [
+                FocusStatusSection(
+                    id: "focus:approval",
+                    title: "待审批",
+                    emptyHint: "暂无待审批请求",
+                    badgeStatus: .awaitingApproval,
+                    sessions: awaiting
+                ),
+                newSection,
+                FocusStatusSection(
+                    id: "focus:running",
+                    title: "运行中",
+                    emptyHint: "暂无生成中会话",
+                    badgeStatus: .generating,
+                    sessions: running
+                )
+            ]
+        case .byHostAndProject:
+            result = []
+        }
+
+        if !failedUnseen.isEmpty {
+            let failSection = FocusStatusSection(
+                id: "focus:failed",
+                title: "异常 / 错误",
+                emptyHint: "",
+                badgeStatus: .failed,
+                sessions: failedUnseen
+            )
+            result.insert(failSection, at: 0)
+        }
+        return result
+    }
+
+    var focusHostGroups: [HostSessionGroup] {
+        let focusList = hostFilteredRealSessions.filter { Self.isFocusSession($0) }
+        var subsetStates: [HostID: HostConnectionState] = [:]
+        for s in focusList {
+            subsetStates[s.host] = hostStates[s.host] ?? HostConnectionState(host: s.host, isOnline: true)
+        }
+        return SessionGroupingBuilder.buildHostGroups(
+            sessions: focusList,
+            hostStates: subsetStates,
+            homeByHost: remoteHomes,
+            hostSort: hostSortOrder,
+            projectSort: projectSortOrder,
+            pinnedGroupIDs: pinnedGroupIDs,
+            customHostOrder: customHostOrder
+        )
+    }
+
+    static func isFocusSession(_ session: AgentSession) -> Bool {
+        switch session.status {
+        case .awaitingApproval, .generating, .runningTool, .runningProcessOnly:
+            return true
+        case .completed, .failed:
+            return !session.isSeen
+        default:
+            return false
+        }
+    }
+
+    private func sortFocusSessions(_ list: [AgentSession]) -> [AgentSession] {
+        list.sorted { (lhs: AgentSession, rhs: AgentSession) in
+            if lhs.status != rhs.status {
+                return lhs.status < rhs.status
+            }
+            switch projectSortOrder {
+            case .tokenUsage:
+                if lhs.usage.totalTokens != rhs.usage.totalTokens {
+                    return lhs.usage.totalTokens > rhs.usage.totalTokens
+                }
+            case .alphabetical:
+                let cmp = lhs.title.localizedStandardCompare(rhs.title)
+                if cmp != .orderedSame {
+                    return cmp == .orderedAscending
+                }
+            default:
+                break
+            }
+            return lhs.lastActivityAt > rhs.lastActivityAt
+        }
+    }
+
+    func locationContextLabel(for session: AgentSession) -> String {
+        let hostLabel = session.host.isLocal ? "本机" : session.host.displayTitle
+        let home = remoteHomes[session.host] ?? (session.host.isLocal ? NSHomeDirectory() : "/root")
+        let rawDir = session.groupDirectory ?? session.cwd
+        if SessionGroupingBuilder.isSpecificProjectDirectory(rawDir, home: home, isLocal: session.host.isLocal),
+           let dir = rawDir {
+            let proj = (dir as NSString).lastPathComponent
+            if !proj.isEmpty {
+                return "\(hostLabel) / \(proj)"
+            }
+        }
+        return hostLabel
     }
 
     var allHostSummaries: [(host: HostID, connection: HostConnectionState, sessionCount: Int)] {
@@ -320,6 +478,7 @@ final class AppModel {
         if !viewedCompleted.isEmpty {
             markSessionsSeen(Array(viewedCompleted))
         }
+        isAllConversationsExpanded = false
     }
 
     func sessionRowScrollVisibilityChanged(sessionID: String, isVisible: Bool) {
@@ -1055,6 +1214,10 @@ final class AppModel {
         }
         if let hostOrder: [String] = loadCodable(key: "customHostOrder") {
             customHostOrder = hostOrder
+        }
+        if let rawFocusOrder = ud.string(forKey: "focusArrangementOrder"),
+           let fo = FocusArrangementOrder(rawValue: rawFocusOrder) {
+            focusArrangementOrder = fo
         }
         if let rawProjSort = ud.string(forKey: "projectSortOrder"),
            let ps = ProjectSortOrder(rawValue: rawProjSort) {
