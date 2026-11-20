@@ -130,6 +130,21 @@ final class AppModel {
         startBackgroundPolling()
     }
 
+    init(showcaseOverview: Bool) {
+        let demo = DemoData.makeShowcase()
+        self.sessions = demo.sessions
+        self.hostStates = demo.hostStates
+        self.remoteHomes = [.local: "/Users/dev", .ssh(alias: "gpu-dev-01"): "/data", .ssh(alias: "build-mac"): "/Users/builder"]
+        self.sshHosts = [
+            SSHHostConfig(alias: "gpu-dev-01", hostname: "10.24.8.15", user: "ubuntu", isEnabled: true),
+            SSHHostConfig(alias: "build-mac", hostname: "10.24.9.42", user: "builder", isEnabled: true)
+        ]
+        self.balanceReadings = Array(demo.balances.prefix(2))
+        self.subscriptionCards = demo.subscriptions
+        self.expandedSessionIDs = ["demo:claude:acmecore"]
+        self.isShowingOverview = showcaseOverview
+    }
+
     var menuBarCounts: MenuBarCounts {
         SessionGroupingBuilder.computeMenuBarCounts(sessions: sessions)
     }

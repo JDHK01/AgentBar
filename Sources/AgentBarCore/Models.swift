@@ -127,6 +127,9 @@ public enum HostID: Hashable, Codable, Sendable {
     public var displayTitle: String {
         switch self {
         case .local:
+            if ProcessInfo.processInfo.environment["AGENTBAR_GENERIC_HOSTNAME"] == "1" {
+                return "本机 · MacBook Pro"
+            }
             let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
             return "本机 · \(host)"
         case .ssh(let alias):
