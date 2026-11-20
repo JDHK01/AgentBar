@@ -386,13 +386,26 @@ if [ -d "$HOME/.dsh/storages/session_projcache/sessions" ]; then
 fi
 
 printf "@@BEGIN procs 0 ps\n"
-ps -eo pid=,pcpu=,rss=,tty=,args= 2>/dev/null | grep -E '(^|[ /])(claude|codex|dsh)( |$)' | grep -v 'grep' | head -n 20 | while IFS= read -r line; do
+tmux_panes=$(tmux list-panes -a -F '#{pane_tty} #{session_name}:#{window_index}.#{pane_index}' 2>/dev/null || true)
+ps -eo pid=,pcpu=,rss=,tty=,args= 2>/dev/null | grep -E '(^|[ /])(claude|codex|dsh)( |$)' | grep -v 'grep' | head -n 40 | while IFS= read -r line; do
   pid=$(printf "%s" "$line" | awk '{print $1}')
+  tty=$(printf "%s" "$line" | awk '{print $4}')
   cwd=""
   if [ -n "$pid" ] && [ -d "/proc/$pid/cwd" ]; then
     cwd=$(readlink "/proc/$pid/cwd" 2>/dev/null || true)
   fi
-  printf "%s\t@@CWD=%s\n" "$line" "$cwd"
+  sid=""
+  ep=""
+  meta="$HOME/.claude/sessions/$pid.json"
+  if [ -n "$pid" ] && [ -f "$meta" ]; then
+    sid=$(grep -o '"sessionId" *: *"[^"]*"' "$meta" 2>/dev/null | head -n 1 | cut -d'"' -f4)
+    ep=$(grep -o '"entrypoint" *: *"[^"]*"' "$meta" 2>/dev/null | head -n 1 | cut -d'"' -f4)
+  fi
+  pane=""
+  if [ -n "$tmux_panes" ] && [ "$tty" != "?" ]; then
+    pane=$(printf "%s\n" "$tmux_panes" | awk -v t="/dev/$tty" '$1 == t { $1 = ""; sub(/^ /, ""); print; exit }')
+  fi
+  printf "%s\t@@CWD=%s\t@@SID=%s\t@@EP=%s\t@@TMUX=%s\n" "$line" "$cwd" "$sid" "$ep" "$pane"
 done
 printf "@@END\n"
 
@@ -641,9 +654,16 @@ fi
     private static func parseRemoteProcessBlock(_ text: String) -> [ProcessStats] {
         var out: [ProcessStats] = []
         for rawLine in text.split(whereSeparator: \.isNewline) {
-            let parts = rawLine.components(separatedBy: "\t@@CWD=")
-            let psPart = parts.first?.trimmingCharacters(in: .whitespaces) ?? ""
-            let cwdPart = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : ""
+            let fields = rawLine.components(separatedBy: "\t@@")
+            let psPart = fields.first?.trimmingCharacters(in: .whitespaces) ?? ""
+            var extras: [String: String] = [:]
+            for field in fields.dropFirst() {
+                guard let eq = field.firstIndex(of: "=") else { continue }
+                let value = field[field.index(after: eq)...].trimmingCharacters(in: .whitespaces)
+                if !value.isEmpty {
+                    extras[String(field[..<eq])] = value
+                }
+            }
             let cols = psPart.split(maxSplits: 4, omittingEmptySubsequences: true, whereSeparator: \.isWhitespace)
             guard cols.count >= 5,
                   let pid = Int32(cols[0]) else {
@@ -658,8 +678,11 @@ fi
                 memoryBytes: rssKB * 1024,
                 cpuPercent: cpu,
                 tty: tty,
-                cwd: cwdPart.isEmpty ? nil : cwdPart,
-                command: cmd
+                cwd: extras["CWD"],
+                command: cmd,
+                sessionID: extras["SID"],
+                entrypoint: extras["EP"],
+                tmuxTarget: extras["TMUX"]
             ))
         }
         return out
@@ -670,19 +693,36 @@ fi
         into sessions: inout [AgentSession],
         host: HostID
     ) {
-        for proc in procs {
+        // Processes that report their Claude session ID are bound exactly; cwd matching is only a fallback.
+        let ordered = procs.filter { $0.sessionID != nil } + procs.filter { $0.sessionID == nil }
+        for proc in ordered {
             let lowerCmd = proc.command.lowercased()
-            if let idx = sessions.firstIndex(where: { s in
-                guard s.process == nil else { return false }
-                if let pcwd = proc.cwd, let scwd = s.cwd, pcwd == scwd {
-                    return true
-                }
-                if lowerCmd.contains("claude") && s.kind == .claudeCode { return proc.cwd == nil }
-                if lowerCmd.contains("codex") && (s.kind == .codexCLI || s.kind == .codexDesktop) { return proc.cwd == nil }
-                if lowerCmd.contains("dsh") && s.kind == .deepseekHarness { return proc.cwd == nil }
+            let procMatchesKind: (AgentSession) -> Bool = { s in
+                if lowerCmd.contains("claude") { return s.kind == .claudeCode }
+                if lowerCmd.contains("codex") { return s.kind == .codexCLI || s.kind == .codexDesktop }
+                if lowerCmd.contains("dsh") { return s.kind == .deepseekHarness }
                 return false
-            }) {
+            }
+            let matchedIndex: Int?
+            if let sid = proc.sessionID {
+                matchedIndex = sessions.firstIndex { $0.process == nil && $0.rawSessionID == sid }
+            } else {
+                matchedIndex = sessions.firstIndex(where: { s in
+                    guard s.process == nil, procMatchesKind(s) else { return false }
+                    if let pcwd = proc.cwd, let scwd = s.cwd {
+                        return pcwd == scwd
+                    }
+                    return proc.cwd == nil
+                })
+            }
+            if let idx = matchedIndex {
                 sessions[idx].process = proc
+                let entrypoint = proc.entrypoint?.lowercased()
+                if entrypoint?.contains("vscode") == true {
+                    sessions[idx].launchEnvironment = .vscodeExtension
+                } else if entrypoint == "cli" {
+                    sessions[idx].launchEnvironment = .terminalCLI
+                }
                 if lowerCmd.contains(".cursor-server") || lowerCmd.contains("/cursor/") {
                     sessions[idx].launchEnvironment = .cursorExtension
                 } else if lowerCmd.contains(".vscode-server") || lowerCmd.contains("/vscode/") {

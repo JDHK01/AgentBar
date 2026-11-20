@@ -81,10 +81,12 @@ enum JumpService {
             return
         case .vscodeExtension:
             if openLocalIDEFolder(scheme: "vscode", bundleIDs: ["com.microsoft.VSCode"], cwd: session.cwd) {
+                openClaudeExtensionSessionIfNeeded(session, preferCursor: false, delaySeconds: 0.8)
                 return
             }
         case .cursorExtension:
             if openLocalIDEFolder(scheme: "cursor", bundleIDs: ["com.todesktop.230313mzl4w4u92", "com.cursor.Cursor"], cwd: session.cwd) {
+                openClaudeExtensionSessionIfNeeded(session, preferCursor: true, delaySeconds: 0.8)
                 return
             }
         case .traeExtension:
@@ -126,6 +128,11 @@ enum JumpService {
     }
 
     private static func jumpToRemoteSSH(session: AgentSession, alias: String) {
+        if let pane = session.process?.tmuxTarget, !pane.isEmpty {
+            openSSHInTerminal(alias: alias, tmuxTarget: pane)
+            return
+        }
+
         let isIDESession = session.launchEnvironment == .vscodeExtension
             || session.launchEnvironment == .cursorExtension
             || isRemoteSSHOpenInLocalVSCode(alias: alias)
@@ -133,6 +140,7 @@ enum JumpService {
         if isIDESession {
             let preferCursor = session.launchEnvironment == .cursorExtension || session.kind == .cursor
             if openInRemoteIDE(alias: alias, cwd: session.cwd, preferCursor: preferCursor) {
+                openClaudeExtensionSessionIfNeeded(session, preferCursor: preferCursor, delaySeconds: 1.5)
                 return
             }
         }
@@ -144,6 +152,27 @@ enum JumpService {
             resumeCommand: session.resumeCommand,
             autoExecuteResume: shouldAutoRunResume
         )
+    }
+
+    /// Asks the Claude Code IDE extension to focus a specific conversation via its `/open?session=` URI handler.
+    private static func openClaudeExtensionSessionIfNeeded(_ session: AgentSession, preferCursor: Bool, delaySeconds: Double) {
+        guard session.kind == .claudeCode,
+              session.launchEnvironment == .vscodeExtension || session.launchEnvironment == .cursorExtension else {
+            return
+        }
+        let encoded = session.rawSessionID.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? session.rawSessionID
+        let schemes = preferCursor ? ["cursor", "vscode"] : ["vscode", "cursor"]
+        for scheme in schemes {
+            guard let url = URL(string: "\(scheme)://anthropic.claude-code/open?session=\(encoded)"),
+                  NSWorkspace.shared.urlForApplication(toOpen: url) != nil else {
+                continue
+            }
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64(delaySeconds * 1_000_000_000))
+                NSWorkspace.shared.open(url)
+            }
+            return
+        }
     }
 
     private static func isRemoteSSHOpenInLocalVSCode(alias: String) -> Bool {
@@ -341,7 +370,8 @@ enum JumpService {
         alias: String,
         cwd: String? = nil,
         resumeCommand: String? = nil,
-        autoExecuteResume: Bool = true
+        autoExecuteResume: Bool = true,
+        tmuxTarget: String? = nil
     ) {
         onBeforeJump?()
         if let resumeCommand {
@@ -357,18 +387,27 @@ enum JumpService {
         }
 
         var remoteInnerParts: [String] = []
-        if let cwd, !cwd.isEmpty {
-            let escapedDir = cwd.replacingOccurrences(of: "'", with: "'\\''")
-            remoteInnerParts.append("cd '\(escapedDir)' 2>/dev/null || true")
-        }
-        if let resumeCommand, !resumeCommand.isEmpty {
-            if autoExecuteResume {
-                let escResume = resumeCommand.replacingOccurrences(of: "'", with: "'\\''")
-                remoteInnerParts.append("printf '\\033[1;36m▶ 正在恢复远程会话：%s\\033[0m\\n' '\(escResume)'")
-                remoteInnerParts.append("\(resumeCommand) || true")
-            } else {
-                let escResume = resumeCommand.replacingOccurrences(of: "'", with: "'\\''")
-                remoteInnerParts.append("printf '\\033[1;32m✓ 已进入项目目录（恢复命令已复制到剪贴板：%s）\\033[0m\\n' '\(escResume)'")
+        if let tmuxTarget, !tmuxTarget.isEmpty {
+            let safeTarget = tmuxTarget.filter { !"'\"`$\\".contains($0) }
+            let sessionName = safeTarget.split(separator: ":", maxSplits: 1).first.map(String.init) ?? safeTarget
+            let windowTarget = safeTarget.split(separator: ".").dropLast().joined(separator: ".")
+            remoteInnerParts.append("tmux select-window -t '\(windowTarget.isEmpty ? safeTarget : windowTarget)' 2>/dev/null")
+            remoteInnerParts.append("tmux select-pane -t '\(safeTarget)' 2>/dev/null")
+            remoteInnerParts.append("tmux attach-session -t '\(sessionName)' || true")
+        } else {
+            if let cwd, !cwd.isEmpty {
+                let escapedDir = cwd.replacingOccurrences(of: "'", with: "'\\''")
+                remoteInnerParts.append("cd '\(escapedDir)' 2>/dev/null || true")
+            }
+            if let resumeCommand, !resumeCommand.isEmpty {
+                if autoExecuteResume {
+                    let escResume = resumeCommand.replacingOccurrences(of: "'", with: "'\\''")
+                    remoteInnerParts.append("printf '\\033[1;36m▶ 正在恢复远程会话：%s\\033[0m\\n' '\(escResume)'")
+                    remoteInnerParts.append("\(resumeCommand) || true")
+                } else {
+                    let escResume = resumeCommand.replacingOccurrences(of: "'", with: "'\\''")
+                    remoteInnerParts.append("printf '\\033[1;32m✓ 已进入项目目录（恢复命令已复制到剪贴板：%s）\\033[0m\\n' '\(escResume)'")
+                }
             }
         }
         remoteInnerParts.append("exec \\$SHELL -l")

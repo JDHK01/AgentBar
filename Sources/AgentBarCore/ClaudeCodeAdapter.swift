@@ -155,6 +155,8 @@ public enum ClaudeCodeAdapter {
         var sawIDEMarker = false
         var startedAt: Date?
         var lastActivityAt = fileModificationDate
+        var lastGeneratedAt: Date?
+        var lastEntrypoint: String?
 
         for lineSub in jsonl.split(whereSeparator: \.isNewline) {
             guard let data = lineSub.data(using: .utf8),
@@ -176,6 +178,9 @@ public enum ClaudeCodeAdapter {
             }
             if let dir = obj["cwd"] as? String, !dir.isEmpty {
                 cwd = dir
+            }
+            if let ep = obj["entrypoint"] as? String, !ep.isEmpty {
+                lastEntrypoint = ep
             }
             if let attachment = obj["attachment"] as? [String: Any] {
                 sawIDEMarker = true
@@ -319,6 +324,7 @@ public enum ClaudeCodeAdapter {
                     if !textChunks.isEmpty {
                         let joined = textChunks.joined(separator: "\n\n")
                         lastAssistantText = joined
+                        lastGeneratedAt = eventDate ?? lastActivityAt
                         if openTools.isEmpty {
                             lastEventKind = "assistant_text"
                         }
@@ -382,7 +388,7 @@ public enum ClaudeCodeAdapter {
         }
         let isSeen = SeenSessionLookup.isSeen(
             sessionID: sessionID,
-            lastActivityAt: lastActivityAt,
+            lastActivityAt: lastGeneratedAt ?? lastActivityAt,
             seenAtByID: seenAtByID
         )
         let ageSeconds = Date().timeIntervalSince(lastActivityAt)
@@ -459,10 +465,11 @@ public enum ClaudeCodeAdapter {
             lastOutputMarkdown: lastAssistantText,
             errorBanner: errorBanner,
             sourceFilePath: filePath,
-            launchEnvironment: sawIDEMarker ? .vscodeExtension : .terminalCLI,
+            launchEnvironment: (sawIDEMarker || lastEntrypoint?.contains("vscode") == true) ? .vscodeExtension : .terminalCLI,
             startedAt: startedAt ?? fileModificationDate,
             lastActivityAt: lastActivityAt,
-            isSeen: isSeen
+            isSeen: isSeen,
+            lastGeneratedAt: lastGeneratedAt
         )
     }
 

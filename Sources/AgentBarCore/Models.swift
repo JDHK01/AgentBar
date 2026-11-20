@@ -286,6 +286,9 @@ public struct ProcessStats: Codable, Hashable, Sendable {
     public var tty: String?
     public var cwd: String?
     public var command: String
+    public var sessionID: String?
+    public var entrypoint: String?
+    public var tmuxTarget: String?
 
     public init(
         pid: Int32,
@@ -293,9 +296,15 @@ public struct ProcessStats: Codable, Hashable, Sendable {
         cpuPercent: Double,
         tty: String? = nil,
         cwd: String? = nil,
-        command: String = ""
+        command: String = "",
+        sessionID: String? = nil,
+        entrypoint: String? = nil,
+        tmuxTarget: String? = nil
     ) {
         self.pid = pid
+        self.sessionID = sessionID
+        self.entrypoint = entrypoint
+        self.tmuxTarget = tmuxTarget
         self.memoryBytes = memoryBytes
         self.cpuPercent = cpuPercent
         self.tty = tty
@@ -371,6 +380,8 @@ public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
     public var startedAt: Date
     public var lastActivityAt: Date
     public var isSeen: Bool
+    /// Time of the latest assistant output; unseen state is judged against this rather than file mtime.
+    public var lastGeneratedAt: Date?
 
     public init(
         id: String,
@@ -404,7 +415,8 @@ public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
         launchEnvironment: SessionLaunchEnvironment = .auto,
         startedAt: Date = Date(),
         lastActivityAt: Date = Date(),
-        isSeen: Bool = false
+        isSeen: Bool = false,
+        lastGeneratedAt: Date? = nil
     ) {
         self.id = id
         self.rawSessionID = rawSessionID
@@ -438,6 +450,11 @@ public struct AgentSession: Identifiable, Codable, Hashable, Sendable {
         self.startedAt = startedAt
         self.lastActivityAt = lastActivityAt
         self.isSeen = isSeen
+        self.lastGeneratedAt = lastGeneratedAt
+    }
+
+    public var seenBaselineAt: Date {
+        lastGeneratedAt ?? lastActivityAt
     }
 
     public var contextRatio: Double? {
@@ -770,6 +787,7 @@ public enum SessionDeduplicator {
         out.startedAt = min(newer.startedAt, older.startedAt)
         out.lastActivityAt = max(newer.lastActivityAt, older.lastActivityAt)
         out.isSeen = newer.isSeen
+        out.lastGeneratedAt = [newer.lastGeneratedAt, older.lastGeneratedAt].compactMap { $0 }.max()
 
         if isGenericFallbackTitle(newer.title) && !isGenericFallbackTitle(older.title) && !older.title.isEmpty {
             out.title = older.title

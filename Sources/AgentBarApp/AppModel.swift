@@ -1324,7 +1324,7 @@ final class AppModel {
         for idx in list.indices where !list[idx].isSeen {
             if SeenSessionLookup.isSeen(
                 sessionID: list[idx].id,
-                lastActivityAt: list[idx].lastActivityAt,
+                lastActivityAt: list[idx].seenBaselineAt,
                 seenAtByID: seenAtBySessionID
             ) {
                 list[idx].isSeen = true

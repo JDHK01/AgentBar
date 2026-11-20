@@ -50,6 +50,79 @@ struct AgentBarHookMain {
         precondition(claude.usage.input == 2200 && claude.usage.output == 320 && claude.usage.cacheRead == 9000)
         precondition(HookApprovalManager.matchedHighRiskRule(in: "rm -rf .build") == "rm -rf")
 
+        // Regression: trailing non-assistant records must not re-mark a viewed session as new.
+        let seenISO = ISO8601DateFormatter()
+        seenISO.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let seenTestNow = Date()
+        let replyDate = seenTestNow.addingTimeInterval(-120)
+        let noiseDate = seenTestNow.addingTimeInterval(-30)
+        let seenBaseJSONL = """
+        {"type":"user","cwd":"/tmp/proj","sessionId":"s-seen","timestamp":"\(seenISO.string(from: replyDate.addingTimeInterval(-10)))","message":{"role":"user","content":"跑一下训练"}}
+        {"type":"assistant","cwd":"/tmp/proj","sessionId":"s-seen","timestamp":"\(seenISO.string(from: replyDate))","message":{"id":"m_seen_1","model":"claude-opus-5-5","stop_reason":"end_turn","content":[{"type":"text","text":"训练已启动。"}]}}
+        {"type":"queue-operation","operation":"enqueue","sessionId":"s-seen","timestamp":"\(seenISO.string(from: noiseDate))"}
+        {"type":"file-history-snapshot","sessionId":"s-seen"}
+        """
+        let unseen = ClaudeCodeAdapter.parseTranscript(
+            jsonl: seenBaseJSONL,
+            fallbackSessionID: "s-seen",
+            filePath: "/tmp/s-seen.jsonl",
+            fileModificationDate: noiseDate,
+            host: .local
+        )!
+        precondition(unseen.status == .completed && !unseen.isSeen)
+        let seenMap = [unseen.id: replyDate.timeIntervalSince1970 + 1]
+        let afterNoise = ClaudeCodeAdapter.parseTranscript(
+            jsonl: seenBaseJSONL,
+            fallbackSessionID: "s-seen",
+            filePath: "/tmp/s-seen.jsonl",
+            fileModificationDate: noiseDate,
+            host: .local,
+            seenAtByID: seenMap
+        )!
+        precondition(afterNoise.isSeen && afterNoise.status == .waitingForInput, "Non-assistant records re-marked a viewed session as new")
+        let newReplyJSONL = seenBaseJSONL + "\n" + """
+        {"type":"assistant","cwd":"/tmp/proj","sessionId":"s-seen","timestamp":"\(seenISO.string(from: seenTestNow.addingTimeInterval(-5)))","message":{"id":"m_seen_2","model":"claude-opus-5-5","stop_reason":"end_turn","content":[{"type":"text","text":"训练完成。"}]}}
+        """
+        let afterReply = ClaudeCodeAdapter.parseTranscript(
+            jsonl: newReplyJSONL,
+            fallbackSessionID: "s-seen",
+            filePath: "/tmp/s-seen.jsonl",
+            fileModificationDate: seenTestNow,
+            host: .local,
+            seenAtByID: seenMap
+        )!
+        precondition(!afterReply.isSeen && afterReply.status == .completed, "A new assistant reply must mark the session as new")
+
+        // Regression: remote processes bind to sessions by Claude session ID, carrying entrypoint and tmux pane.
+        let probeMtime = Int(noiseDate.timeIntervalSince1970)
+        let probeStdout = [
+            "@@HOME /home/tester",
+            "@@BEGIN claude \(probeMtime) /home/tester/.claude/projects/-tmp-proj/s-vscode.jsonl",
+            #"{"type":"user","cwd":"/tmp/proj","sessionId":"s-vscode","entrypoint":"claude-vscode","message":{"role":"user","content":"插件里的会话"}}"#,
+            "@@END",
+            "@@BEGIN claude \(probeMtime) /home/tester/.claude/projects/-tmp-proj/s-tmux.jsonl",
+            #"{"type":"user","cwd":"/tmp/proj","sessionId":"s-tmux","entrypoint":"claude-vscode","message":{"role":"user","content":"tmux 里的会话"}}"#,
+            "@@END",
+            "@@BEGIN claude \(probeMtime) /home/tester/.claude/projects/-tmp-proj/s-idle.jsonl",
+            #"{"type":"user","cwd":"/tmp/proj","sessionId":"s-idle","message":{"role":"user","content":"没有进程的会话"}}"#,
+            "@@END",
+            "@@BEGIN procs 0 ps",
+            "  303  0.0  1000 ? /home/tester/.vscode-server/extensions/openai.chatgpt/bin/codex app-server\t@@CWD=/tmp/proj",
+            "  101  0.0  1000 pts/3 claude\t@@CWD=/tmp/proj\t@@SID=s-tmux\t@@EP=cli\t@@TMUX=cc:0.0",
+            "  202  0.0  1000 ? /home/tester/.vscode-server/extensions/anthropic.claude-code/resources/native-binary/claude\t@@CWD=/tmp/proj\t@@SID=s-vscode\t@@EP=claude-vscode\t@@TMUX=",
+            "@@END"
+        ].joined(separator: "\n")
+        let probed = SSHProbeService.parseProbeOutput(stdout: probeStdout, host: .ssh(alias: "test-host"))
+        guard let tmuxSession = probed.sessions.first(where: { $0.rawSessionID == "s-tmux" }),
+              let vscodeSession = probed.sessions.first(where: { $0.rawSessionID == "s-vscode" }),
+              let idleSession = probed.sessions.first(where: { $0.rawSessionID == "s-idle" }) else {
+            fputs("FAIL: remote probe sessions missing\n", stderr)
+            Foundation.exit(1)
+        }
+        precondition(tmuxSession.process?.pid == 101 && tmuxSession.process?.tmuxTarget == "cc:0.0" && tmuxSession.launchEnvironment == .terminalCLI)
+        precondition(vscodeSession.process?.pid == 202 && vscodeSession.process?.tmuxTarget == nil && vscodeSession.launchEnvironment == .vscodeExtension)
+        precondition(idleSession.process == nil, "A Codex process must never be attached to a Claude session")
+
         // Regression tests for Issue #1: Codex multi-shard deduplication & Claude subagent IDs
         let sharedCodexID = "01a1f304-3559-7223-8f2a-f5fca907db41"
         let now = Date()
@@ -292,6 +365,9 @@ struct AgentBarHookMain {
                     let claudeCount = res.sessions.filter { $0.kind == .claudeCode }.count
                     let runningCount = res.sessions.filter { StatusCategoryFilter.running.matches($0) }.count
                     print("SSH host #\(idx): online=\(res.connection.isOnline), latency=\(res.connection.latencyMs ?? -1)ms, sessions=\(res.sessions.count) (claude=\(claudeCount), running=\(runningCount)), err=\(res.connection.errorMessage ?? "none")")
+                    for s in res.sessions where s.kind == .claudeCode && s.process != nil {
+                        print("  claude \(s.rawSessionID.prefix(8)) env=\(s.launchEnvironment) pid=\(s.process?.pid ?? 0) tmux=\(s.process?.tmuxTarget ?? "-") status=\(s.status)")
+                    }
                 }
             }
         }
