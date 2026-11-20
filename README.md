@@ -48,7 +48,7 @@
   - **终端 CLI（本机 & 远程 SSH）**：自动定位活跃 iTerm2 / Terminal `tty` 标签页，或打开终端自动 `cd` 进入目标目录执行 `claude --resume` / `codex resume` 恢复对话。
 
 ### 6. 总数据看板 & 自动刷新的额度 Dashboard
-- **会员与周期额度自动识别**：自动读取本机登录态，展示 **ChatGPT Plus / Pro（5h 窗口 & 7d 周额度进度条）**、Claude、DeepSeek 与 **Antigravity**（本机安装登录 `agy` 1.1.11+ CLI 后自动读取套餐名称、各模型组额度与重置时间）实时消耗与会话统计。
+- **会员与周期额度自动识别**：自动读取本机登录态，展示 **ChatGPT Plus / Pro（5h 窗口 & 7d 周额度进度条）**、Claude、**DeepSeek Harness 账号钱包（自动读取 `~/.dsh` 登录态同步充值余额、赠金与累计消耗，无需手填 Token）** 与 **Antigravity**（本机安装登录 `agy` 1.1.11+ CLI 后自动读取套餐名称、各模型组额度与重置时间）实时消耗与会话统计。
 - **支持自定义 Dashboard 后台自动同步**：可添加团队内部 **SSO 网页看板**（内置智能登录窗口与 DOM 额度自动提取）、**JSON API**（如 DeepSeek API Key 余额，Token 安全存入 macOS Keychain）或**自定义 Shell 脚本**，支持每 **1 / 3 / 5 / 15 分钟**在后台静默自动刷新。
 
 ---
@@ -104,6 +104,7 @@ AgentBar/
 │   │   ├── CodexAdapter.swift        # Codex 桌面版 / CLI 会话与速率解析
 │   │   ├── ClaudeCodeAdapter.swift   # Claude Code CLI / IDE 扩展会话解析
 │   │   ├── DeepSeekHarnessAdapter.swift
+│   │   ├── DeepSeekAccountUsageService.swift # DeepSeek Harness 账号钱包与额度同步
 │   │   ├── CursorTraeAdapter.swift   # Cursor / Trae 本地工作区会话解析
 │   │   ├── AntigravityAdapter.swift  # Antigravity 2.0 本地摘要库与运行态解析
 │   │   ├── AntigravityUsageService.swift # Antigravity CLI 套餐与模型组额度解析

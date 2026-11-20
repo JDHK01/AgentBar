@@ -271,12 +271,14 @@ public enum DemoData {
             ),
             BalanceReading(
                 sourceID: UUID(uuidString: "00000000-0000-0000-0000-000000000002")!,
-                name: "DeepSeek API",
+                name: "DeepSeek Harness",
+                sourceType: .deepSeekHarness,
+                dashboardURL: "https://platform.deepseek.com/usage",
                 formattedValue: "¥86.20",
                 numericValue: 86.20,
-                usedFraction: 0.86,
-                footnote: "低于阈值 ¥100",
-                isLow: true,
+                usedFraction: 0.42,
+                footnote: "充值余额 · 累计已用 ¥63.80",
+                isLow: false,
                 updatedAt: now.addingTimeInterval(-45)
             ),
             BalanceReading(
@@ -314,6 +316,17 @@ public enum DemoData {
                     QuotaWindowReading(label: "5h 窗口", usedPercent: 28, resetsAt: now.addingTimeInterval(7200))
                 ],
                 todayTokens: 1_711_400
+            ),
+            SubscriptionCardItem(
+                id: "demo:sub:deepseek",
+                kind: .deepseekHarness,
+                providerTitle: "DeepSeek · Harness",
+                planBadge: "余额 ¥86.20",
+                subtitle: "充值 ¥86.20 · 累计消耗 ¥63.80",
+                quotas: [
+                    QuotaWindowReading(label: "账户消耗", usedPercent: 42)
+                ],
+                todayTokens: 639_292
             )
         ]
 

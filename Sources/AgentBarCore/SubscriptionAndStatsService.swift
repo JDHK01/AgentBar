@@ -103,7 +103,8 @@ public enum SubscriptionAndStatsService {
         homeDirectory: String = NSHomeDirectory(),
         sessions: [AgentSession],
         antigravityPlan: String? = nil,
-        antigravityQuotas: [QuotaWindowReading] = []
+        antigravityQuotas: [QuotaWindowReading] = [],
+        deepSeekAccount: DeepSeekAccountSnapshot? = nil
     ) -> [SubscriptionCardItem] {
         let uniqueSessions = SessionDeduplicator.deduplicate(sessions)
         let dayCutoff = Calendar.current.startOfDay(for: Date())
@@ -116,7 +117,11 @@ public enum SubscriptionAndStatsService {
         if let claudeCard = detectClaudeSubscription(homeDirectory: homeDirectory, todaySessions: todaySessions) {
             items.append(claudeCard)
         }
-        if let dshCard = detectDeepSeekSubscription(homeDirectory: homeDirectory, todaySessions: todaySessions) {
+        if let dshCard = detectDeepSeekSubscription(
+            homeDirectory: homeDirectory,
+            todaySessions: todaySessions,
+            account: deepSeekAccount
+        ) {
             items.append(dshCard)
         }
         if let antigravityCard = detectAntigravityCard(sessions: uniqueSessions, plan: antigravityPlan, quotas: antigravityQuotas) {
@@ -323,23 +328,64 @@ public enum SubscriptionAndStatsService {
 
     private static func detectDeepSeekSubscription(
         homeDirectory: String,
-        todaySessions: [AgentSession]
+        todaySessions: [AgentSession],
+        account: DeepSeekAccountSnapshot? = nil
     ) -> SubscriptionCardItem? {
-        let dshDir = (homeDirectory as NSString).appendingPathComponent(".dsh")
+        let dshDir = DeepSeekAccountUsageService.resolveDSHHome(homeDirectory: homeDirectory)
         var isDir: ObjCBool = false
         let exists = FileManager.default.fileExists(atPath: dshDir, isDirectory: &isDir) && isDir.boolValue
+        let hasStoredCreds = DeepSeekAccountUsageService.hasStoredCredentials(homeDirectory: homeDirectory)
         let dshTodayTokens = todaySessions
             .filter { $0.kind == .deepseekHarness || $0.kind == .deepseekChat }
             .reduce(0) { $0 + $1.usage.totalTokens }
-        guard exists || dshTodayTokens > 0 else { return nil }
+        guard exists || hasStoredCreds || dshTodayTokens > 0 || account != nil else { return nil }
+
+        var planBadge = hasStoredCreds ? "DeepSeek 账号" : "API 计费"
+        var subtitle = "今日 \(FormattingHelpers.compactTokens(dshTodayTokens)) tokens"
+        var quotas: [QuotaWindowReading] = []
+
+        if let account {
+            switch account.status {
+            case .ready:
+                let balText = account.primaryFormattedBalance
+                planBadge = account.isZeroOrNegativeBalance ? "无可用余额" : "余额 \(balText)"
+                if let primary = account.primaryWallet {
+                    var parts: [String] = []
+                    let normStr = DeepSeekAccountUsageService.formatBalance(primary.normalBalance, symbol: primary.symbol)
+                    parts.append("充值 \(normStr)")
+                    if primary.bonusBalance > 0 {
+                        let bonusStr = DeepSeekAccountUsageService.formatBalance(primary.bonusBalance, symbol: primary.symbol)
+                        parts.append("赠金 \(bonusStr)")
+                    }
+                    if primary.totalCost > 0 {
+                        let costStr = DeepSeekAccountUsageService.formatBalance(primary.totalCost, symbol: primary.symbol)
+                        parts.append("累计消耗 \(costStr)")
+                    }
+                    subtitle = parts.joined(separator: " · ")
+                }
+                if let usedFrac = account.primaryUsedFraction {
+                    quotas = [QuotaWindowReading(label: "账户消耗", usedPercent: usedFrac * 100.0)]
+                }
+            case .expired:
+                planBadge = "登录已过期"
+                subtitle = "请在 DeepSeek Harness 重新登录以同步余额"
+            case .signedOut:
+                planBadge = "未登录账号"
+                subtitle = dshTodayTokens > 0
+                    ? "今日 \(FormattingHelpers.compactTokens(dshTodayTokens)) tokens · 登录后显示余额"
+                    : "在 DeepSeek Harness 登录后自动同步余额"
+            case .failed:
+                break
+            }
+        }
 
         return SubscriptionCardItem(
             id: "sub:deepseek",
             kind: .deepseekHarness,
-            providerTitle: "DeepSeek Harness",
-            planBadge: "API 计费",
-            subtitle: "今日 \(FormattingHelpers.compactTokens(dshTodayTokens)) tokens",
-            quotas: [],
+            providerTitle: "DeepSeek · Harness",
+            planBadge: planBadge,
+            subtitle: subtitle,
+            quotas: quotas,
             todayTokens: dshTodayTokens
         )
     }

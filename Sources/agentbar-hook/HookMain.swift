@@ -14,7 +14,10 @@ struct AgentBarHookMain {
             handleClaudePermission(json: json)
         case "self-test":
             Task {
-                await runSelfTest(probeSSH: args.contains("--probe-ssh"))
+                await runSelfTest(
+                    probeSSH: args.contains("--probe-ssh"),
+                    probeDSH: args.contains("--probe-dsh")
+                )
                 Foundation.exit(0)
             }
             RunLoop.main.run()
@@ -24,7 +27,7 @@ struct AgentBarHookMain {
         }
     }
 
-    private static func runSelfTest(probeSSH: Bool = false) async {
+    private static func runSelfTest(probeSSH: Bool = false, probeDSH: Bool = false) async {
         let jsonl = """
         {"type":"user","cwd":"/Users/test/repo","sessionId":"s-1","timestamp":"2026-11-19T04:00:00.000Z","message":{"role":"user","content":"帮我修 bug"}}
         {"type":"ai-title","aiTitle":"修复加载器崩溃","sessionId":"s-1"}
@@ -222,6 +225,48 @@ struct AgentBarHookMain {
         )!
         precondition(parsedSub.id == "local:claude:s-1:a68596" && parsedSub.rawSessionID == "s-1")
 
+        // Unit tests: DeepSeek Harness credentials YAML & wallet summary parser
+        let sampleCredYAML = """
+        version: 1
+        records:
+          deepseek-account-platform/device:
+            kind: grant
+            payload:
+              id: 00000000-0000-4000-8000-000000000001
+          deepseek-account-platform/default:
+            kind: grant
+            payload:
+              version: 1
+              token: "test_dsh_grant_token_123456"
+              issuer: https://platform.deepseek.com
+        refs:
+          SAMPLE_KEY: sample
+        """
+        let parsedGrant = DeepSeekAccountUsageService.parseCredentialsGrant(yaml: sampleCredYAML)
+        precondition(parsedGrant?.token == "test_dsh_grant_token_123456")
+        precondition(parsedGrant?.issuerOrigin == "https://platform.deepseek.com")
+
+        let sampleSummaryJSON = """
+        {"code":0,"data":{"biz_code":0,"biz_data":{"normal_wallets":[{"currency":"USD","balance":"0E-16"},{"currency":"CNY","balance":"2.7088218400000000"}],"bonus_wallets":[{"currency":"USD","balance":"0"},{"currency":"CNY","balance":"5.00"}],"total_costs":[{"currency":"USD","amount":"0E-16"},{"currency":"CNY","amount":"7.3964567200000000"}]}}}
+        """.data(using: .utf8)!
+        let parsedSnap = DeepSeekAccountUsageService.parseUserSummaryResponse(
+            data: sampleSummaryJSON,
+            statusCode: 200
+        )
+        precondition(parsedSnap.status == .ready)
+        precondition(parsedSnap.primaryFormattedBalance == "¥7.70")
+        let sampleReading = parsedSnap.toBalanceReading(source: .deepSeekHarnessPreset)
+        precondition(sampleReading.formattedValue == "¥7.70")
+        precondition(sampleReading.footnote.contains("含赠金 ¥5.00") && sampleReading.footnote.contains("已用 ¥7.39"))
+        precondition(!sampleReading.isLow && !sampleReading.needsLogin)
+
+        let expiredJSON = #"{"code":40003,"msg":"token expired"}"#.data(using: .utf8)!
+        let expiredSnap = DeepSeekAccountUsageService.parseUserSummaryResponse(data: expiredJSON, statusCode: 200)
+        precondition(expiredSnap.status == .expired)
+        precondition(expiredSnap.toBalanceReading(source: .deepSeekHarnessPreset).needsLogin == true)
+        precondition(DeepSeekAccountUsageService.formatBalance(Decimal(string: "0.004")!, symbol: "¥") == "<¥0.01")
+        precondition(DeepSeekAccountUsageService.formatBalance(Decimal(string: "1234.569")!, symbol: "¥") == "¥1,234.56")
+
         let realClaude = await ClaudeCodeAdapter.loadLocalSessions(lookbackHours: 168)
         let realCodex = await CodexAdapter.loadLocalSessions(lookbackHours: 168)
         let realDSH = await DeepSeekHarnessAdapter.loadLocalSessions(lookbackHours: 168)
@@ -230,6 +275,11 @@ struct AgentBarHookMain {
         precondition(Set(combinedReal.map(\.id)).count == combinedReal.count, "Duplicate session IDs detected!")
         let sshEntries = SSHProbeService.discoverSSHConfigEntries()
         print("PASS self-test | local sessions -> claude=\(realClaude.count), codex=\(realCodex.count), dsh=\(realDSH.count), cursor=\(realCursor.count), ssh_hosts=\(sshEntries.count)")
+        if probeDSH {
+            let snap = await DeepSeekAccountUsageService.fetchSnapshot()
+            let reading = snap.toBalanceReading(source: .deepSeekHarnessPreset)
+            print("DSH account probe -> status=\(snap.status), balance=\(reading.formattedValue), footnote=\(reading.footnote), usedFraction=\(String(describing: reading.usedFraction))")
+        }
         if probeSSH {
             await withTaskGroup(of: (Int, SSHProbeResult).self) { group in
                 for (idx, cfg) in sshEntries.enumerated() {

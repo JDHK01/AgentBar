@@ -228,8 +228,22 @@ struct SettingsWindowView: View {
                 }
                 .frame(width: 155)
 
-                Button("+ 添加 DeepSeek 模板") {
-                    model.balanceSources.append(.deepSeekPreset)
+                Menu("+ 添加 DeepSeek 看板") {
+                    Button("DeepSeek Harness 账号（自动读取本机登录态）") {
+                        if let idx = model.balanceSources.firstIndex(where: { $0.type == .deepSeekHarness }) {
+                            model.balanceSources[idx].isEnabled = true
+                        } else {
+                            var preset = BalanceSourceConfig.deepSeekHarnessPreset
+                            if model.balanceSources.contains(where: { $0.id == preset.id }) {
+                                preset.id = UUID()
+                            }
+                            model.balanceSources.append(preset)
+                        }
+                        Task { await model.refreshBalances() }
+                    }
+                    Button("DeepSeek 开放平台 API Key") {
+                        model.balanceSources.append(.deepSeekPreset)
+                    }
                 }
                 .controlSize(.small)
                 .buttonStyle(.glass)
@@ -287,16 +301,22 @@ struct SettingsWindowView: View {
                 .buttonStyle(.plain)
             }
 
-            HStack {
-                Text(item.type == .command ? "Shell 命令" : "URL 地址")
+            if item.type == .deepSeekHarness {
+                Text("自动读取本机 ~/.dsh/.credentials.yaml 中的 DeepSeek Harness 登录态，实时同步充值余额、赠金与累计消耗（无需手动填写 Token）。")
                     .font(.system(size: 11.5))
                     .foregroundStyle(.secondary)
-                    .frame(width: 72, alignment: .trailing)
-                TextField(item.type == .command ? "例如：curl -s ... | jq .balance" : "https://...", text: source.urlOrCommand)
-                    .textFieldStyle(.roundedBorder)
+            } else {
+                HStack {
+                    Text(item.type == .command ? "Shell 命令" : "URL 地址")
+                        .font(.system(size: 11.5))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 72, alignment: .trailing)
+                    TextField(item.type == .command ? "例如：curl -s ... | jq .balance" : "https://...", text: source.urlOrCommand)
+                        .textFieldStyle(.roundedBorder)
+                }
             }
 
-            if item.type != .command {
+            if item.type == .jsonAPI || item.type == .webExtract {
                 HStack {
                     Text(item.type == .jsonAPI ? "JSON 路径" : "提取规则")
                         .font(.system(size: 11.5))
@@ -326,6 +346,12 @@ struct SettingsWindowView: View {
                     .frame(width: 240)
                 } else if item.type == .webExtract {
                     Button("打开看板 / SSO 登录") {
+                        model.openDashboardWindow(for: source.wrappedValue)
+                    }
+                    .controlSize(.small)
+                    .buttonStyle(.glass)
+                } else if item.type == .deepSeekHarness {
+                    Button("打开 DeepSeek 用量看板") {
                         model.openDashboardWindow(for: source.wrappedValue)
                     }
                     .controlSize(.small)

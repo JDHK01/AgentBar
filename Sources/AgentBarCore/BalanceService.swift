@@ -2,12 +2,14 @@ import Foundation
 import Security
 
 public enum BalanceSourceType: String, Codable, CaseIterable, Sendable {
+    case deepSeekHarness
     case jsonAPI
     case webExtract
     case command
 
     public var title: String {
         switch self {
+        case .deepSeekHarness: return "DeepSeek Harness 账号"
         case .jsonAPI: return "JSON API"
         case .webExtract: return "网页提取（SSO）"
         case .command: return "自定义命令"
@@ -43,6 +45,21 @@ public struct BalanceSourceConfig: Codable, Hashable, Identifiable, Sendable {
         self.currencySymbol = currencySymbol
         self.lowBalanceThreshold = lowBalanceThreshold
         self.isEnabled = isEnabled
+    }
+
+    public static let deepSeekHarnessDefaultID = UUID(uuidString: "00000000-0000-0000-0000-00000000D548")!
+
+    public static var deepSeekHarnessPreset: BalanceSourceConfig {
+        BalanceSourceConfig(
+            id: deepSeekHarnessDefaultID,
+            name: "DeepSeek Harness",
+            type: .deepSeekHarness,
+            urlOrCommand: "https://platform.deepseek.com/usage",
+            extractorOrJSONPath: "",
+            currencySymbol: "¥",
+            lowBalanceThreshold: nil,
+            isEnabled: true
+        )
     }
 
     public static var deepSeekPreset: BalanceSourceConfig {
@@ -225,10 +242,15 @@ public enum BalanceService {
         for source: BalanceSourceConfig,
         webEvaluator: (@Sendable (URL, String) async throws -> String)? = nil
     ) async -> BalanceReading {
+        if source.type == .deepSeekHarness {
+            return await DeepSeekAccountUsageService.fetchReading(for: source)
+        }
         let dashboardURL = source.type == .webExtract ? source.urlOrCommand : nil
         do {
             let rawString: String
             switch source.type {
+            case .deepSeekHarness:
+                return await DeepSeekAccountUsageService.fetchReading(for: source)
             case .jsonAPI:
                 rawString = try await fetchJSONAPI(source: source)
             case .command:

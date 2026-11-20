@@ -19,6 +19,7 @@ final class AppModel {
     private var antigravityPlan: String?
     private var antigravityQuotas: [QuotaWindowReading] = []
     private var lastAntigravityPlanAttemptAt: Date?
+    private var deepSeekAccount: DeepSeekAccountSnapshot?
 
     var isShowingOverview: Bool = false {
         didSet {
@@ -731,10 +732,13 @@ final class AppModel {
         }
 
         await refreshLocalSessions()
-        await refreshSSHHosts()
         if includeBalances {
-            await refreshBalances()
+            async let sshTask: Void = refreshSSHHosts()
+            async let balTask: Void = refreshBalances()
+            _ = await (sshTask, balTask)
+            return
         }
+        await refreshSSHHosts()
     }
 
     func refreshOnPanelOpen() async {
@@ -750,7 +754,8 @@ final class AppModel {
     func refreshBalancesIfStale(maxAge: TimeInterval) {
         guard !demoModeEnabled, !isRefreshingBalances else { return }
         let hasBalanceSource = balanceSources.contains(where: \.isEnabled)
-        guard hasBalanceSource || AntigravityUsageService.executable != nil else { return }
+        let hasDSH = DeepSeekAccountUsageService.hasStoredCredentials()
+        guard hasBalanceSource || AntigravityUsageService.executable != nil || hasDSH else { return }
         let isStale = lastBalanceRefreshAt.map { Date().timeIntervalSince($0) >= maxAge } ?? true
         if isStale || (hasBalanceSource && balanceReadings.isEmpty) {
             Task { await refreshBalances(silent: true) }
@@ -759,6 +764,7 @@ final class AppModel {
 
     func refreshLocalSessions() async {
         guard !demoModeEnabled else { return }
+        discoverAndMergeDeepSeekHarnessDashboard()
         let lookback = lookbackHours
         let subagents = includeSubagents
         let seen = seenAtBySessionID
@@ -796,7 +802,10 @@ final class AppModel {
 
     private func updateSubscriptionCards() {
         subscriptionCards = SubscriptionAndStatsService.detectLocalSubscriptions(
-            sessions: sessions, antigravityPlan: antigravityPlan, antigravityQuotas: antigravityQuotas
+            sessions: sessions,
+            antigravityPlan: antigravityPlan,
+            antigravityQuotas: antigravityQuotas,
+            deepSeekAccount: deepSeekAccount
         )
     }
 
@@ -916,24 +925,48 @@ final class AppModel {
         guard !demoModeEnabled, !isRefreshingBalances else { return }
         let enabled = balanceSources.filter(\.isEnabled)
         let antigravityCLI = AntigravityUsageService.executable
-        guard !enabled.isEmpty || antigravityCLI != nil else {
+        let hasDSHCreds = DeepSeekAccountUsageService.hasStoredCredentials()
+        let needsDSHSnapshot = hasDSHCreds || enabled.contains(where: { $0.type == .deepSeekHarness })
+        guard !enabled.isEmpty || antigravityCLI != nil || needsDSHSnapshot else {
             balanceReadings = []
             saveCodable(balanceReadings, key: "cachedBalanceReadings")
             antigravityPlan = nil
             antigravityQuotas = []
             lastAntigravityPlanAttemptAt = nil
+            deepSeekAccount = nil
             updateSubscriptionCards()
             return
         }
         isRefreshingBalances = true
         defer { isRefreshingBalances = false }
 
+        let dshFallbackKeychainID = enabled.first(where: { $0.type == .deepSeekHarness })?.id
+            ?? BalanceSourceConfig.deepSeekHarnessDefaultID
         async let antigravityRefresh: Void = refreshAntigravityUsage(executable: antigravityCLI, forcePlan: !silent)
+        async let dshSnapshotTask: DeepSeekAccountSnapshot? = needsDSHSnapshot
+            ? DeepSeekAccountUsageService.fetchSnapshot(fallbackKeychainID: dshFallbackKeychainID)
+            : nil
+
         let previousByID = Dictionary(uniqueKeysWithValues: balanceReadings.map { ($0.sourceID, $0) })
+        let fetchedDSHSnapshot = await dshSnapshotTask
+        if let snap = fetchedDSHSnapshot, !demoModeEnabled {
+            if case .failed = snap.status, silent, let prev = deepSeekAccount, prev.status == .ready {
+                // Preserve last ready snapshot across transient silent network errors
+            } else {
+                deepSeekAccount = snap
+                saveCodable(snap, key: "cachedDeepSeekAccount")
+            }
+        }
+
         var updated: [BalanceReading] = []
         for src in enabled {
-            let reading = await BalanceService.fetchReading(for: src) { url, expr in
-                try await WebBalanceExtractor.shared.evaluateOnPage(url: url, jsOrSelector: expr)
+            let reading: BalanceReading
+            if src.type == .deepSeekHarness, let snap = fetchedDSHSnapshot {
+                reading = snap.toBalanceReading(source: src)
+            } else {
+                reading = await BalanceService.fetchReading(for: src) { url, expr in
+                    try await WebBalanceExtractor.shared.evaluateOnPage(url: url, jsOrSelector: expr)
+                }
             }
             if silent,
                reading.formattedValue == "获取失败",
@@ -950,6 +983,7 @@ final class AppModel {
         balanceReadings = updated
         lastBalanceRefreshAt = Date()
         saveCodable(updated, key: "cachedBalanceReadings")
+        updateSubscriptionCards()
     }
 
     private func refreshAntigravityUsage(executable: URL?, forcePlan: Bool) async {
@@ -972,6 +1006,10 @@ final class AppModel {
     }
 
     func openDashboardWindow(for reading: BalanceReading) {
+        if reading.sourceType == .deepSeekHarness {
+            openDeepSeekHarnessDestination(needsLogin: reading.needsLogin, urlString: reading.dashboardURL)
+            return
+        }
         guard let src = balanceSources.first(where: { $0.id == reading.sourceID }) else {
             if let urlStr = reading.dashboardURL, let url = URL(string: urlStr) {
                 NSWorkspace.shared.open(url)
@@ -982,6 +1020,14 @@ final class AppModel {
     }
 
     func openDashboardWindow(for source: BalanceSourceConfig) {
+        if source.type == .deepSeekHarness {
+            let existing = balanceReadings.first(where: { $0.sourceID == source.id })
+            openDeepSeekHarnessDestination(
+                needsLogin: existing?.needsLogin ?? false,
+                urlString: existing?.dashboardURL ?? source.urlOrCommand
+            )
+            return
+        }
         WebBalanceExtractor.shared.openInteractiveLoginWindow(
             urlString: source.urlOrCommand,
             title: source.name,
@@ -1000,6 +1046,35 @@ final class AppModel {
         }
     }
 
+    private func openDeepSeekHarnessDestination(needsLogin: Bool, urlString: String?) {
+        if needsLogin {
+            let appCandidates = [
+                "/Applications/DeepSeek Harness.app",
+                (NSHomeDirectory() as NSString).appendingPathComponent("Applications/DeepSeek Harness.app")
+            ]
+            if let appPath = appCandidates.first(where: { FileManager.default.fileExists(atPath: $0) }) {
+                NSWorkspace.shared.openApplication(
+                    at: URL(fileURLWithPath: appPath),
+                    configuration: NSWorkspace.OpenConfiguration()
+                )
+                return
+            }
+        }
+        let target = (urlString?.isEmpty == false ? urlString! : "https://platform.deepseek.com/usage")
+        if let url = URL(string: target) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
+    func discoverAndMergeDeepSeekHarnessDashboard() {
+        let ud = UserDefaults.standard
+        guard !ud.bool(forKey: "dshDashboardAutoAddedV1") else { return }
+        guard DeepSeekAccountUsageService.hasStoredCredentials() else { return }
+        if !balanceSources.contains(where: { $0.type == .deepSeekHarness }) {
+            balanceSources.append(.deepSeekHarnessPreset)
+        }
+        ud.set(true, forKey: "dshDashboardAutoAddedV1")
+    }
     private func mergePendingApprovals(
         _ approvals: [PendingApproval],
         into list: inout [AgentSession],
@@ -1233,6 +1308,10 @@ final class AppModel {
         if let sources: [BalanceSourceConfig] = loadCodable(key: "balanceSources") {
             balanceSources = sources
         }
+        if let cachedDSH: DeepSeekAccountSnapshot = loadCodable(key: "cachedDeepSeekAccount") {
+            deepSeekAccount = cachedDSH
+        }
+        discoverAndMergeDeepSeekHarnessDashboard()
         if let cachedReadings: [BalanceReading] = loadCodable(key: "cachedBalanceReadings"),
            !cachedReadings.isEmpty {
             let validIDs = Set(balanceSources.filter(\.isEnabled).map(\.id))

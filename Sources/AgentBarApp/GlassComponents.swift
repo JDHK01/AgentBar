@@ -223,6 +223,7 @@ struct BalanceCardView: View {
     var onOpenDashboard: (() -> Void)? = nil
 
     var body: some View {
+        let isClickable = (reading.sourceType == .webExtract || reading.dashboardURL != nil) && onOpenDashboard != nil
         let timeTag = reading.needsLogin ? "" : " · \(FormattingHelpers.relativeDuration(since: reading.updatedAt))"
         let cleanFoot = reading.footnote
             .replacingOccurrences(of: " · 刚刚", with: "")
@@ -239,7 +240,7 @@ struct BalanceCardView: View {
                         .font(.system(size: 9.5, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
-                if reading.sourceType == .webExtract, onOpenDashboard != nil {
+                if isClickable {
                     Image(systemName: reading.needsLogin ? "person.badge.key.fill" : "arrow.up.right.square")
                         .font(.system(size: 10.5, weight: .semibold))
                         .foregroundStyle(reading.needsLogin ? Color.orange : Color.accentColor)
@@ -270,6 +271,8 @@ struct BalanceCardView: View {
                 .padding(.vertical, 1)
             }
 
+            Spacer(minLength: 0)
+
             Text(cleanFoot + timeTag)
                 .font(.system(size: 10))
                 .foregroundStyle(.secondary)
@@ -277,15 +280,28 @@ struct BalanceCardView: View {
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 8)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
         .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .onTapGesture {
-            if reading.sourceType == .webExtract {
+            if isClickable {
                 onOpenDashboard?()
             }
         }
-        .help(reading.sourceType == .webExtract ? "点击打开 Dashboard 页面或完成 SSO 登录同步" : reading.name)
+        .help(tooltipText(isClickable: isClickable))
+    }
+
+    private func tooltipText(isClickable: Bool) -> String {
+        switch reading.sourceType {
+        case .deepSeekHarness:
+            return reading.needsLogin
+                ? "点击打开 DeepSeek Harness 登录账号并自动同步额度"
+                : "点击打开 DeepSeek 用量与充值看板"
+        case .webExtract:
+            return "点击打开 Dashboard 页面或完成 SSO 登录同步"
+        case .jsonAPI, .command:
+            return isClickable ? "点击打开看板页面" : reading.name
+        }
     }
 }
 
