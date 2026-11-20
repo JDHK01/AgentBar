@@ -1,6 +1,14 @@
-# AgentBar
-
-**原生 macOS 液态玻璃（Liquid Glass）菜单栏 AI Agent 会话监控、指标统计与一键审批工具。**
+<div align="center">
+  <img src="docs/images/app-logo.png" alt="AgentBar Logo" width="112" height="112" />
+  <h1>AgentBar</h1>
+  <p><strong>原生 macOS 液态玻璃（Liquid Glass）菜单栏 AI Agent 会话监控、指标统计与一键审批工具</strong></p>
+  <p>
+    <img src="https://img.shields.io/badge/macOS-26%2B%20Tahoe-1d4ed8?style=flat-square&logo=apple&logoColor=white" alt="macOS 26+" />
+    <img src="https://img.shields.io/badge/Swift-6.2-f05138?style=flat-square&logo=swift&logoColor=white" alt="Swift 6.2" />
+    <img src="https://img.shields.io/badge/UI-Liquid%20Glass-6366f1?style=flat-square" alt="Liquid Glass" />
+    <img src="https://img.shields.io/badge/Dependencies-Zero-10b981?style=flat-square" alt="Zero Dependencies" />
+  </p>
+</div>
 
 当你同时在本机多个项目工程和好几台远程 SSH 开发机上跑着 **Codex、Claude Code、DeepSeek Harness、Cursor、Trae、Antigravity** 时，很容易忘记哪个任务已经生成完、哪个卡在权限审批、哪个半路报错了。**AgentBar** 常驻在 macOS 菜单栏，用四色状态灯实时汇总本机与所有远程服务器上的会话状态，**看完新内容后绿点自动消失**，默认**精简收起只聚焦重点会话**，并支持**菜单栏一键审批**与**秒级跳回对应对话窗口**。
 
