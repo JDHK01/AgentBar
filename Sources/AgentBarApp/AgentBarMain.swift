@@ -65,11 +65,35 @@ private enum ReadmeScreenshotRenderer {
         try? FileManager.default.createDirectory(atPath: outputDir, withIntermediateDirectories: true)
         NSApp.activate(ignoringOtherApps: true)
 
-        let sessionsModel = AppModel(showcaseOverview: false)
+        let collapsedModel = AppModel(showcaseOverview: false)
+        collapsedModel.sessions.removeAll { $0.id == "demo:ssh1:codex-fail" }
+        collapsedModel.expandedSessionIDs = []
+        collapsedModel.isAllConversationsExpanded = false
         renderShot(
-            model: sessionsModel,
-            height: 690,
+            model: collapsedModel,
+            height: 758,
             outputPath: (outputDir as NSString).appendingPathComponent("sessions-panel.png")
+        )
+
+        let expandedModel = AppModel(showcaseOverview: false)
+        expandedModel.balanceReadings = []
+        expandedModel.selectedCategory = nil
+        expandedModel.isAllConversationsExpanded = true
+        expandedModel.expandedSessionIDs = ["demo:codex:acmecore-test"]
+        expandedModel.sessions = expandedModel.sessions.filter {
+            ["demo:codex:acmecore-test", "demo:claude:acmecore", "demo:dsh:aurora-ui", "demo:cursor:data-pipeline", "demo:ssh1:claude"].contains($0.id)
+        }.map { session in
+            var copy = session
+            if copy.id == "demo:dsh:aurora-ui" {
+                copy.status = .waitingForInput
+                copy.isSeen = true
+            }
+            return copy
+        }
+        renderShot(
+            model: expandedModel,
+            height: 775,
+            outputPath: (outputDir as NSString).appendingPathComponent("sessions-expanded.png")
         )
 
         let overviewModel = AppModel(showcaseOverview: true)
